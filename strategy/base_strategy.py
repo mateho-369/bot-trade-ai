@@ -245,7 +245,9 @@ class AIEntryReview:
     news_hash: str
     decision: Literal["approve", "reject", "wait"]
     confidence: float
-    provider: Literal["ollama", "openai", "test", "replay", "rule_fallback"]
+    # Registry label of the AI that answered (groq, groq2, groq+groq2 for all_must_approve, ollama,
+    # openai...), or a provenance marker: test (simulated), replay (backtest), rule_fallback.
+    provider: str
     risk_percent: Decimal | None = None
     request_hash: str | None = None
     provider_model: str | None = None
@@ -261,7 +263,9 @@ class AIEntryReview:
             raise BrokerError("invalid reviewed provider model identifier")
         if not isinstance(self.source, SourceKind) or self.decision not in {"approve", "reject", "wait"}:
             raise BrokerError("invalid AI decision/provenance")
-        if self.provider not in {"ollama", "openai", "test", "replay", "rule_fallback"}:
+        if not isinstance(self.provider, str) or not re.fullmatch(
+            r"[a-z0-9][a-z0-9_.+-]{0,63}", self.provider
+        ):
             raise BrokerError("unknown review provider")
         for value in (self.proposal_hash, self.code_hash, self.model_sha256, self.news_hash):
             valid_key(value)

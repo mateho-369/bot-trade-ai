@@ -38,6 +38,7 @@ def rule_fallback_permitted(
     return bool(
         mode == "TECHNICAL_ONLY"
         and settings.ai_rule_fallback_enabled
+        and not settings.ai_require_approval  # AI_REQUIRE_APPROVAL=true => only a real AI approval.
         and settings.mode != OperatingMode.BACKTEST
         and profile.data_source != SourceKind.HISTORICAL
         and (settings.mode != OperatingMode.LIVE or settings.ai_rule_fallback_allow_live)
@@ -54,6 +55,8 @@ def rule_fallback_problems(
 ) -> list[str]:
     """Finalization/pre-send verification of a stored fallback review (empty list = acceptable)."""
     problems = []
+    if settings.ai_require_approval:
+        problems.append("ai_approval_required")
     if not rule_fallback_permitted(settings, profile, fallback_mode=fallback_mode):
         problems.append("rule_fallback_disabled_or_out_of_scope")
     if review.provider_model != RULE_FALLBACK_MODEL or review.request_hash is not None:

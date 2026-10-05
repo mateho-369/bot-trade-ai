@@ -62,6 +62,8 @@ class AIDecisionJournal(JournalBase):
     threshold_reached: Mapped[int | None] = mapped_column(Integer)
     source: Mapped[str] = mapped_column(String(16), nullable=False)
     model: Mapped[str | None] = mapped_column(String(128))
+    # Registry label of the AI that answered (groq, groq2, a+b), RULE_FALLBACK, MECHANICAL or none.
+    provider_label: Mapped[str | None] = mapped_column(String(64), index=True)
     input_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     input_summary: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
     action: Mapped[str] = mapped_column(String(32), nullable=False)
@@ -102,7 +104,14 @@ def ensure_journal_tables(database: Database) -> None:
         with database.engine.begin() as connection:  # Pre-rename AI-first databases keep history.
             connection.execute(text("ALTER TABLE ai_config_overlay RENAME TO config_history"))
     JournalBase.metadata.create_all(database.engine, checkfirst=True)
+    columns = {c["name"] for c in inspect(database.engine).get_columns("ai_decision_journal")}
+    if "provider_label" not in columns:  # Additive in-place upgrade; old rows stay NULL ("unknown").
+        with database.engine.begin() as connection:
+            connection.execute(text("ALTER TABLE ai_decision_journal ADD COLUMN provider_label VARCHAR(64)"))
     ensure_control_tables(database)
+    from ai.trade_attribution import ensure_attribution_tables
+
+    ensure_attribution_tables(database)
 
 
 def _text(value: object, limit: int) -> str:
@@ -149,6 +158,7 @@ class DecisionJournal:
         executed: bool = False,
         rejection_reason: str | None = None,
         final_action: str | None = None,
+        provider_label: str | None = None,
     ) -> JournalEntry:
         if kind not in KINDS or source not in SOURCES:
             raise ValueError("unknown journal kind/source")
@@ -171,6 +181,7 @@ class DecisionJournal:
             threshold_reached=threshold_reached,
             source=source,
             model=_text(model, 128) if model else None,
+            provider_label=_text(provider_label, 64) if provider_label else None,
             input_hash=sha256_json(summary),
             input_summary=json.loads(canonical_json(summary)),
             action=_text(action, 32),
@@ -258,6 +269,7 @@ class DecisionJournal:
             "threshold_reached": row.threshold_reached,
             "source": row.source,
             "model": row.model,
+            "provider_label": row.provider_label,
             "action": row.action,
             "confidence": row.confidence,
             "reason": row.reason,

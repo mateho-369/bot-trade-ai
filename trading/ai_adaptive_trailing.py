@@ -205,6 +205,10 @@ class AdaptiveTrailing:
             position_id=event.position_id,
             threshold_reached=event.threshold,
             model=model,
+            # Who acted: the AI registry label, or MECHANICAL for the lock-first fallback.
+            provider_label=(
+                (getattr(model, "label", None) or "unknown") if event.source == "ai" else "MECHANICAL"
+            ),
             input_summary={k: v for k, v in (context or {}).items() if k not in {"format"}},
             adjustments={"mechanical_sl": event.mechanical_sl},
             executed=event.final_action not in {"mechanical_continue", "ai_action_failed"},

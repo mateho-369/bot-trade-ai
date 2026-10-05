@@ -401,6 +401,8 @@ def test_opt_in_probes_use_only_their_own_temporary_files_and_never_open_the_db(
 def test_unwritable_state_directory_is_blocked_without_permission_change(tmp_path):
     if os.name == "nt":
         pytest.skip("POSIX permission bits are the exercised mechanism")
+    if hasattr(os, "geteuid") and os.geteuid() == 0:
+        pytest.skip("root bypasses POSIX permission bits, so an unwritable directory cannot be simulated")
     cfg = settings(tmp_path)
     for name in ("data", "data/logs", "data/backups"):
         (tmp_path / name).mkdir(parents=True)

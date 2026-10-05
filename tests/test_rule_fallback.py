@@ -63,11 +63,12 @@ def request_for(cfg, purpose, binding=None):
 ENTRY_BINDING = {"proposal_hash": "a" * 64, "news_hash": "b" * 64}
 # These tests exercise the TECHNICAL_ONLY owner mode; BLOCK_ON_AI_FAILURE (the default) is covered
 # in tests/test_ai_fallback_mode.py.
-TECH = {"ai_fallback_mode": "TECHNICAL_ONLY"}
+# Rule-fallback trades are opt-in: AI_REQUIRE_APPROVAL=false + AI_RULE_FALLBACK_ENABLED=true + TECHNICAL_ONLY.
+TECH = {"ai_fallback_mode": "TECHNICAL_ONLY", "ai_require_approval": False, "ai_rule_fallback_enabled": True}
 
 
 async def supervised(tmp_path, providers_factory, **settings):
-    signals, execution = await make_signal_runtime(tmp_path, **TECH, **settings)
+    signals, execution = await make_signal_runtime(tmp_path, **{**TECH, **settings})
     providers = providers_factory(execution.settings)
     router = AIRouter(execution.settings, execution.database, execution.clock, providers=providers)
     supervisor = AISupervisor(
@@ -92,12 +93,14 @@ def audit_actions(execution):
 # ---------------------------------------------------------------- settings / scope
 
 
-def test_fallback_defaults_on_but_live_scope_needs_explicit_opt_in(tmp_path):
+def test_fallback_defaults_off_and_live_scope_needs_explicit_opt_in(tmp_path):
     cfg = config(tmp_path)
-    assert cfg.ai_rule_fallback_enabled is True and cfg.ai_rule_fallback_allow_live is False
+    assert cfg.ai_rule_fallback_enabled is False and cfg.ai_rule_fallback_allow_live is False
+    assert cfg.ai_require_approval is True  # No trade without a valid AI approval by default.
     assert cfg.ai_rule_fallback_min_score >= max(cfg.ai_confidence_threshold, cfg.min_signal_score)
     public = cfg.public_config()
-    assert public["ai_rule_fallback_enabled"] is True and public["openai_response_format"] == "json_object"
+    assert public["ai_rule_fallback_enabled"] is False and public["openai_response_format"] == "json_object"
+    assert public["ai_require_approval"] is True
     profile = SimpleNamespace(data_source=SourceKind.MT5)
     for mode, allow_live, expected in (
         (OperatingMode.PAPER, False, True),
@@ -108,11 +111,15 @@ def test_fallback_defaults_on_but_live_scope_needs_explicit_opt_in(tmp_path):
     ):
         stub = SimpleNamespace(
             ai_rule_fallback_enabled=True,
+            ai_require_approval=False,
             ai_rule_fallback_allow_live=allow_live,
             mode=mode,
             ai_fallback_mode="TECHNICAL_ONLY",
         )
         assert rule_fallback_permitted(stub, profile) is expected, mode
+        # AI_REQUIRE_APPROVAL=true puts the fallback out of scope in EVERY mode.
+        required = SimpleNamespace(**{**vars(stub), "ai_require_approval": True})
+        assert rule_fallback_permitted(required, profile) is False
         # BLOCK_ON_AI_FAILURE (the default) puts the fallback out of scope in EVERY mode.
         assert rule_fallback_permitted(stub, profile, fallback_mode="BLOCK_ON_AI_FAILURE") is False
     assert cfg.ai_fallback_mode == "BLOCK_ON_AI_FAILURE"
@@ -120,6 +127,7 @@ def test_fallback_defaults_on_but_live_scope_needs_explicit_opt_in(tmp_path):
     historical = SimpleNamespace(data_source=SourceKind.HISTORICAL)
     paper = SimpleNamespace(
         ai_rule_fallback_enabled=True,
+        ai_require_approval=False,
         ai_rule_fallback_allow_live=False,
         mode=OperatingMode.PAPER,
         ai_fallback_mode="TECHNICAL_ONLY",
@@ -137,7 +145,7 @@ def test_fallback_defaults_on_but_live_scope_needs_explicit_opt_in(tmp_path):
 )
 def test_fallback_threshold_cannot_undercut_ai_or_signal_thresholds(tmp_path, changes):
     with pytest.raises(ValidationError):
-        config(tmp_path, **changes)
+        config(tmp_path, ai_rule_fallback_enabled=True, **changes)
     config(tmp_path, ai_rule_fallback_enabled=False, **changes)  # Irrelevant when disabled.
 
 

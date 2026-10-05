@@ -282,6 +282,15 @@ def inspect_terminal(terminal_path, *, windows):
         ), {"terminal_file_observed": False, "terminal_launched": False}
 
 
+def demo_fast_track_file(upper: dict) -> bool:
+    def flag(name):
+        return str(upper.get(name, "")).strip().lower()
+
+    return (
+        flag("DEMO_FAST_TRACK") == "true" and flag("DEMO_MODE") == "true" and flag("LIVE_TRADING") == "false"
+    )
+
+
 def inspect_env_keys(root, *, env_name):
     """Presence/emptiness of required keys with masked values; safe defaults must stay unchanged."""
     findings, observations = [], {"source": env_name or "immutable_defaults_only"}
@@ -353,6 +362,16 @@ def inspect_env_keys(root, *, env_name):
         ("DEMO_MODE", "true"),
     ):
         observed = str(upper.get(key, "")).strip().lower()
+        if key == "PAPER_TRADING" and observed == "false" and demo_fast_track_file(upper):
+            findings.append(
+                Finding(
+                    "demo_fast_track_broker_stage",
+                    "warning",
+                    "PAPER_TRADING=false is accepted only for the owner-approved DEMO_FAST_TRACK stage "
+                    "(DEMO_MODE=true, LIVE_TRADING=false); the terminal must still report a DEMO account.",
+                )
+            )
+            continue
         if observed and observed != expected:
             findings.append(
                 Finding(

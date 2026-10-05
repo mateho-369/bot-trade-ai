@@ -161,6 +161,8 @@ class OwnerServices:
             "ai_fallback": self._ai_fallback_view,
             "limits": self._limits_view,
             "alerts": lambda **k: self._alerts_view(level=level, **k),
+            "ai_stats": self._ai_stats_view,
+            "audit": self._audit_view,
         }
         if section not in functions:
             raise OwnerInterfaceError("section_not_found", 404)
@@ -170,7 +172,7 @@ class OwnerServices:
             raise OwnerInterfaceError("invalid_alert_level", 422)
         kwargs = (
             {}
-            if section in {"dashboard", "settings", "ai_fallback", "limits"}
+            if section in {"dashboard", "settings", "ai_fallback", "limits", "ai_stats", "audit"}
             else {"limit": limit, "offset": offset}
         )
         result = await asyncio.to_thread(functions[section], **kwargs)
@@ -232,7 +234,38 @@ class OwnerServices:
         status["ai"] = ai_status(self.database, self.clock)
         status["limits"] = effective_limits(self.database, self.settings, self.clock).as_dict()
         status["kill_switch_unaffected"] = True
+        status["require_approval"] = bool(self.settings.ai_require_approval)
+        status["rule_fallback_enabled"] = bool(self.settings.ai_rule_fallback_enabled)
         return status
+
+    def _ai_stats_view(self):
+        """Per-AI-label approvals, rejections, trades, win rate, net profit, confidence, failures."""
+        from ai.decision_journal import ensure_journal_tables
+        from ai.trade_attribution import ai_stats, history
+
+        try:
+            ensure_journal_tables(self.database)  # Additive/idempotent (adds provider_label if missing).
+            stats = ai_stats(self.database)
+            recent = history(self.database, limit=10)
+        except Exception:
+            stats, recent = {"labels": [], "error": "ai_stats_unavailable"}, []
+        stats["configured"] = [
+            {"label": e.label, "model": e.model, "role": e.role, "priority": e.priority, "enabled": e.enabled}
+            for e in self.settings.ai_registry()
+        ]
+        stats["decision_mode"] = self.settings.ai_decision_mode
+        stats["require_approval"] = self.settings.ai_require_approval
+        stats["recent_trades"] = recent
+        return stats
+
+    def _audit_view(self):
+        """Read-only trade audit (no writes; the daily job also syncs attribution and alerts)."""
+        from ai.trade_audit import audit_trades
+
+        try:
+            return audit_trades(self.database, self.settings, self.clock, run_sync=False)
+        except Exception:
+            return {"checked": 0, "flags": [], "counts": {}, "clean": False, "error": "audit_unavailable"}
 
     def _limits_view(self):
         from trading.ai_controls import (

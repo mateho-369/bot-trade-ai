@@ -124,6 +124,109 @@ class NewsSourceCoverage(BaseModel):
         return self
 
 
+AI_LABEL_PATTERN = r"[a-z0-9][a-z0-9_.-]{0,31}"
+# Review provenance markers that are NOT provider labels (simulated, replay and rule-mode reviews).
+RESERVED_AI_LABELS = frozenset({"test", "replay", "rule_fallback", "unknown", "mechanical", "none"})
+KNOWN_AI_HOSTS = {
+    "api.groq.com": "groq",
+    "api.openai.com": "openai",
+    "openrouter.ai": "openrouter",
+    "api.together.xyz": "together",
+    "api.deepseek.com": "deepseek",
+    "api.mistral.ai": "mistral",
+    "api.x.ai": "xai",
+    "generativelanguage.googleapis.com": "gemini",
+    "api.cerebras.ai": "cerebras",
+}
+
+
+def legacy_ai_label(kind: str, base_url: str) -> str:
+    """Stable label for the legacy single-provider settings (OPENAI_BASE_URL/OLLAMA_BASE_URL)."""
+    if kind == "ollama":
+        return "ollama"
+    return KNOWN_AI_HOSTS.get(urlparse(base_url).hostname or "", "openai_compatible")
+
+
+class AIProviderEntry(BaseModel):
+    """One AI_PROVIDERS registry entry. Keys are referenced ONLY by environment-variable name."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
+    label: str
+    kind: Literal["openai_compatible", "ollama"] = "openai_compatible"
+    base_url: str
+    model: str
+    api_key_env: str = ""
+    role: Literal["decision", "trailing", "deep", "review"] = "decision"
+    enabled: StrictBool = True
+    priority: int = Field(default=0, ge=0, le=100)
+
+    @model_validator(mode="after")
+    def _valid_entry(self) -> Self:
+        if not re.fullmatch(AI_LABEL_PATTERN, self.label) or self.label in RESERVED_AI_LABELS:
+            raise ValueError("AI provider label must be lowercase [a-z0-9_.-] and not reserved")
+        if not re.fullmatch(r"[A-Za-z0-9_./:@+-]{1,128}", self.model):
+            raise ValueError("invalid AI provider model identifier")
+        if self.api_key_env and not re.fullmatch(r"[A-Z][A-Z0-9_]{1,63}", self.api_key_env):
+            raise ValueError("api_key_env must be an UPPER_CASE environment variable NAME, never a key")
+        if self.kind == "openai_compatible" and not self.api_key_env:
+            raise ValueError("openai_compatible providers need api_key_env")
+        object.__setattr__(self, "base_url", _valid_url(self.base_url, allow_local_http=True))
+        parsed = urlparse(self.base_url)
+        if parsed.query or parsed.params:
+            raise ValueError("AI endpoint queries/params are forbidden")
+        return self
+
+
+def _env_lookup(name: str) -> str | None:
+    import os
+
+    for key, value in os.environ.items():
+        if key.upper() == name.upper():
+            return value
+    return None
+
+
+class _ProviderKeySource:
+    """Resolves AI_PROVIDERS ``api_key_env`` names from the process env or the SAME .env file.
+
+    Referenced names are removed from the dotenv data (Settings forbids unknown keys) and returned
+    as the secret-only ``ai_provider_secrets`` map. Any other unknown .env key is still rejected.
+    """
+
+    def __init__(self, init_settings, env_settings, dotenv_settings):
+        self.init, self.env, self.dotenv = init_settings, env_settings, dotenv_settings
+
+    def __call__(self) -> dict:
+        data = dict(self.dotenv())
+        init, env = self.init(), self.env()
+        raw = init.get("ai_providers", env.get("ai_providers", data.get("ai_providers")))
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw)
+            except ValueError:
+                return data  # Field validation reports the malformed JSON.
+        names = set()
+        for entry in raw if isinstance(raw, (list, tuple)) else ():
+            name = entry.get("api_key_env") if isinstance(entry, dict) else getattr(entry, "api_key_env", "")
+            label = entry.get("label") if isinstance(entry, dict) else getattr(entry, "label", "")
+            if isinstance(name, str) and name and isinstance(label, str):
+                names.add((name, label))
+        declared = set(Settings.model_fields)
+        secrets = {}
+        for name, label in sorted(names):
+            if name.lower() in declared:
+                continue  # A declared SecretStr (e.g. OPENAI_API_KEY) is read from Settings itself.
+            value = _env_lookup(name)
+            dotenv_value = data.pop(name.lower(), None)
+            if value is None:
+                value = dotenv_value
+            if value:
+                secrets[label] = value
+        if secrets and "ai_provider_secrets" not in init:
+            data["ai_provider_secrets"] = secrets
+        return data
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=PROJECT_ROOT / ".env",
@@ -135,6 +238,17 @@ class Settings(BaseSettings):
         validate_default=True,
         populate_by_name=True,
     )
+
+    @classmethod
+    def settings_customise_sources(
+        cls, settings_cls, init_settings, env_settings, dotenv_settings, file_secret_settings
+    ):
+        return (
+            init_settings,
+            env_settings,
+            _ProviderKeySource(init_settings, env_settings, dotenv_settings),
+            file_secret_settings,
+        )
 
     # Trusted local/test override; defaults to the checked-out repository.
     project_root: Path = Field(default=PROJECT_ROOT, exclude=True)
@@ -310,7 +424,7 @@ class Settings(BaseSettings):
     ai_suggestion_ttl_seconds: int = Field(default=3600, ge=60, le=86400)
     # Rule-based fallback: ONLY when the AI provider is unavailable/times out/returns invalid JSON.
     # A valid AI reject/WAIT/low confidence stays final. News/ML/risk/stage/owner gates still apply.
-    ai_rule_fallback_enabled: bool = True
+    ai_rule_fallback_enabled: bool = False
     ai_rule_fallback_min_score: float = Field(default=80, ge=50, le=100)
     ai_rule_fallback_allow_live: bool = False
     # BLOCK_ON_AI_FAILURE (default, safest): an AI outage blocks NEW entries; mechanical trailing and
@@ -320,6 +434,19 @@ class Settings(BaseSettings):
     ai_fallback_mode: AIFallbackMode = "BLOCK_ON_AI_FAILURE"
     # Entry decisions only: transient provider failures are retried inside AI_TIMEOUT_SECONDS.
     ai_max_retries: int = Field(default=3, ge=0, le=5)
+    # AI_REQUIRE_APPROVAL=true (default): a NEW entry needs a valid AI approval with confidence >=
+    # AI_CONFIDENCE_THRESHOLD. Timeout/error/invalid reply/open circuit => no trade ("no_ai_approval").
+    # Rule-fallback trades (labelled RULE_FALLBACK) need AI_REQUIRE_APPROVAL=false AND
+    # AI_RULE_FALLBACK_ENABLED=true AND the owner TECHNICAL_ONLY fallback mode.
+    ai_require_approval: bool = True
+    # Multi-AI registry (JSON list). Empty => one entry synthesized from the legacy AI_PROVIDER /
+    # OPENAI_* / OLLAMA_* settings, so an existing single Groq setup keeps working unchanged.
+    ai_providers: tuple[AIProviderEntry, ...] = ()
+    # Secret-only values for api_key_env names that are not declared settings (never dumped/hashed).
+    ai_provider_secrets: dict[str, SecretStr] = Field(default_factory=dict, exclude=True, repr=False)
+    # first_available: priority order, failover ONLY on timeout/429/5xx/missing key; a valid
+    # wait/reject is final. all_must_approve: every enabled decision AI must approve the same side.
+    ai_decision_mode: Literal["first_available", "all_must_approve"] = "first_available"
     # Layer-1 AI-dynamic limits (max trades/day 6-20, open positions 1-5, risk 0.1-1.0 %, target $1-20)
     # inside layer-2 hard caps (25 trades, 5 positions, 1.0 % risk). Off => static owner settings.
     ai_dynamic_limits_enabled: bool = True
@@ -391,8 +518,13 @@ class Settings(BaseSettings):
     news_snapshot_max_bytes: int = Field(default=1048576, ge=65536, le=4194304)
     news_snapshot_max_files: int = Field(default=50000, ge=100, le=100000)
     news_alerts_per_refresh: int = Field(default=10, ge=1, le=30)
-    calendar_provider: Literal["auto", "file", "json_http", "finnhub", "disabled"] = "auto"
+    calendar_provider: Literal["auto", "file", "json_http", "finnhub", "faireconomy", "disabled"] = "auto"
     calendar_file_reviewed: bool = False
+    # Free weekly ForexFactory-format JSON (nfs.faireconomy.media). Owner must review its scope.
+    calendar_faireconomy_reviewed: bool = False
+    # block (default): unknown news => no entry. min_lot_demo: when news sources are UNAVAILABLE
+    # (not when they report a block) a DEMO-mode entry may trade at the broker minimum lot only.
+    news_unavailable_policy: Literal["block", "min_lot_demo"] = "block"
     calendar_allow_empty_reviewed: bool = False
     finnhub_calendar_scope_reviewed: bool = False
     finnhub_calendar_timezone: str = "UTC"
@@ -400,6 +532,10 @@ class Settings(BaseSettings):
     calendar_lookahead_hours: int = Field(default=48, ge=6, le=168)
 
     require_stage_gates: bool = True
+    # DEMO_FAST_TRACK (owner-approved): DEMO broker orders without backtest/paper stage evidence,
+    # ONLY when MT5 itself reports a DEMO trade-mode account. Impossible for REAL accounts or LIVE;
+    # orders are tagged demo_fast_track, use the broker minimum lot and are never promotion evidence.
+    demo_fast_track: bool = False
     model_min_labelled_trades: int = Field(default=300, ge=100, le=100000)
     model_walk_forward_folds: int = Field(default=5, ge=3, le=20)
     model_label_horizon_bars: int = Field(default=12, ge=1, le=1000)
@@ -633,6 +769,20 @@ class Settings(BaseSettings):
             raise ValueError(
                 "AI_RULE_FALLBACK_MIN_SCORE must be >= AI_CONFIDENCE_THRESHOLD and MIN_SIGNAL_SCORE"
             )
+        if self.live_trading and self.demo_fast_track:
+            raise ValueError("DEMO_FAST_TRACK is impossible with LIVE_TRADING")
+        if self.live_trading and self.news_unavailable_policy != "block":
+            raise ValueError("NEWS_UNAVAILABLE_POLICY=min_lot_demo is DEMO-only; LIVE requires block")
+        labels = [entry.label for entry in self.ai_providers]
+        if len(labels) > 12 or len(set(labels)) != len(labels):
+            raise ValueError("AI_PROVIDERS needs at most 12 entries with unique labels")
+        for entry in self.ai_providers:
+            if (
+                entry.kind == "ollama"
+                and not self.allow_remote_ollama
+                and urlparse(entry.base_url).hostname not in {"localhost", "127.0.0.1", "::1"}
+            ):
+                raise ValueError("remote Ollama is disabled")
         if self.live_trading:
             if self.demo_mode or self.paper_trading or self.backtest_mode or self.mt5_backend != "real":
                 raise ValueError(
@@ -853,6 +1003,53 @@ class Settings(BaseSettings):
         return self
 
     @property
+    def demo_min_lot_only(self) -> bool:
+        """DEMO mode with DEMO_FAST_TRACK or NEWS_UNAVAILABLE_POLICY=min_lot_demo => broker minimum lot."""
+        return self.mode == OperatingMode.DEMO and (
+            self.demo_fast_track or self.news_unavailable_policy == "min_lot_demo"
+        )
+
+    def ai_registry(self) -> tuple[AIProviderEntry, ...]:
+        """Effective AI_PROVIDERS. Empty list => the legacy settings as ONE/TWO decision entries."""
+        if self.ai_providers:
+            return tuple(self.ai_providers)
+        entries = []
+        for priority, kind in enumerate(dict.fromkeys((self.ai_provider, self.ai_fallback_provider))):
+            if kind == "openai":
+                entries.append(
+                    AIProviderEntry(
+                        label=legacy_ai_label("openai", self.openai_base_url),
+                        kind="openai_compatible",
+                        base_url=self.openai_base_url,
+                        model=self.openai_model,
+                        api_key_env="OPENAI_API_KEY",
+                        priority=priority,
+                    )
+                )
+            elif kind == "ollama":
+                entries.append(
+                    AIProviderEntry(
+                        label="ollama",
+                        kind="ollama",
+                        base_url=self.ollama_base_url,
+                        model=self.ollama_model,
+                        priority=priority,
+                    )
+                )
+        return tuple(entries)
+
+    def ai_provider_key(self, entry: AIProviderEntry) -> str:
+        """Resolved key for one registry entry (never logged; empty => entry not configured)."""
+        if not entry.api_key_env:
+            return ""
+        field = entry.api_key_env.lower()
+        if field in type(self).model_fields:
+            value = getattr(self, field)
+            return value.get_secret_value() if isinstance(value, SecretStr) else ""
+        secret = self.ai_provider_secrets.get(entry.label)
+        return secret.get_secret_value() if secret is not None else ""
+
+    @property
     def mode(self) -> OperatingMode:
         if self.live_trading:
             return OperatingMode.LIVE
@@ -975,6 +1172,11 @@ class Settings(BaseSettings):
             "telegram_configured": bool(self.telegram_bot_token.get_secret_value()),
             "ai_provider": self.ai_provider,
             "ai_rule_fallback_enabled": self.ai_rule_fallback_enabled,
+            "ai_require_approval": self.ai_require_approval,
+            "ai_decision_mode": self.ai_decision_mode,
+            "ai_provider_labels": [e.label for e in self.ai_registry() if e.enabled],
+            "demo_fast_track": self.demo_fast_track,
+            "news_unavailable_policy": self.news_unavailable_policy,
             "ai_rule_fallback_min_score": self.ai_rule_fallback_min_score,
             "ai_rule_fallback_allow_live": self.ai_rule_fallback_allow_live,
             "ai_fallback_mode": self.ai_fallback_mode,

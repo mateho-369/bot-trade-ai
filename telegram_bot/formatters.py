@@ -18,6 +18,8 @@ HELP = """MT5 AI ReflexBot · owner only
 /limits — AI-dynamic limits, owner defaults and hard caps
 /alerts [critical|error|warning|info] — last alerts (Alert Center)
 /ack_all — acknowledge every alert · /ack ALERT_ID — one alert
+/ai_stats — per-AI approvals, rejections, trades, win rate, net profit, failures
+/audit — check every trade has a matching valid AI approval
 
 No order/open/live/risk-escalation/withdrawal commands.
 Reopen expired Mini App sessions from this private owner bot.
@@ -60,7 +62,14 @@ def render(section, result):
             f"Active limits ({limits.get('source', '?')}): {limits.get('max_daily_trades')} trades/day, "
             f"{limits.get('max_open_positions')} positions, risk {limits.get('risk_percent')}%, "
             f"target {limits.get('target_usd')}\n"
-            "Switch: /ai_fallback_block or /ai_fallback_technical (owner only, audited).\n"
+            + (
+                "AI_REQUIRE_APPROVAL=true: no trade without a valid AI approval, in BOTH modes.\n"
+                if result.get("require_approval", True)
+                else "AI_REQUIRE_APPROVAL=false"
+                + ("" if result.get("rule_fallback_enabled") else " (rule fallback disabled)")
+                + "\n"
+            )
+            + "Switch: /ai_fallback_block or /ai_fallback_technical (owner only, audited).\n"
             "Kill switch, risk checks and news block are never affected."
         )[:3600]
     if section == "limits":
@@ -77,6 +86,31 @@ def render(section, result):
             f"daily loss {caps['max_daily_loss_percent']}% · drawdown {caps['max_drawdown_percent']}%\n"
             "Changes >50% need your approval (/suggestions). /ai_reset restores defaults."
         )[:3600]
+    if section == "ai_stats":
+        mode = "required" if result.get("require_approval") else "optional"
+        lines = [f"AI stats · decision mode {result.get('decision_mode', '?')} · AI approval {mode}"]
+        for row in result.get("labels", [])[:12]:
+            win = "-" if row.get("win_rate") is None else f"{row['win_rate']}%"
+            conf = "-" if row.get("avg_confidence") is None else f"{row['avg_confidence']}%"
+            lines.append(
+                f"{row['label']}: approvals {row['approvals']} · rejections {row['rejections']} · "
+                f"trades {row['trades']} (closed {row['closed']}) · win {win} · net {row['net_profit']} · "
+                f"avg conf {conf} · failures {row['failures']}"
+            )
+        if len(lines) == 1:
+            lines.append("No AI decisions or trades stored yet.")
+        configured = ", ".join(
+            f"{c['label']}({c['role']},p{c['priority']}{'' if c['enabled'] else ',off'})"
+            for c in result.get("configured", [])
+        )
+        lines.append("Configured: " + (configured or "none"))
+        return "\n".join(lines)[:3600]
+    if section == "audit":
+        from ai.trade_audit import format_report
+
+        if result.get("error"):
+            return "Trade audit unavailable (stored data could not be read)."
+        return format_report(result)
     if section == "alerts":
         icons = {"INFO": "ℹ️", "WARNING": "⚠️", "ERROR": "🚨", "CRITICAL": "🛑"}
         lines = [f"Alerts · unacknowledged: {result.get('unacknowledged', 0)}"]
@@ -99,7 +133,9 @@ def render(section, result):
                 f"#{row['id']} {row['symbol']} {row['direction']} {row['volume']} · {row['status']}\n"
                 f"ticket/id: {row.get('ticket')} / {row.get('position_identifier')}\n"
                 f"Realized {row.get('profit_account', 'unknown')} {row.get('currency', '')}; "
-                "floating P&L unknown"
+                "floating P&L unknown\n"
+                f"Decided by: {row.get('decided_by', 'unknown')} · trailing: "
+                f"{row.get('trailing_by', 'MECHANICAL')} · result: {row.get('result', 'unknown')}"
             )
         elif section == "signals":
             lines.append(

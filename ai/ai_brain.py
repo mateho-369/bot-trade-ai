@@ -53,6 +53,27 @@ from trading.types import Clock
 LOG = logging.getLogger("ai.brain")
 BLOCK_MODE = "BLOCK_ON_AI_FAILURE"
 BLOCKED_MODEL = "block-on-ai-failure"
+RULE_FALLBACK_LABEL = "RULE_FALLBACK"
+NO_AI_APPROVAL = "no_ai_approval"
+
+
+class ProviderModel(str):
+    """Model identifier that also carries the registry LABEL of the AI that answered.
+
+    A ``str`` subclass so every existing ``(reply, model, ...)`` caller keeps working while the
+    journal/attribution can read ``model.label`` (``getattr(model, "label", None)``).
+    """
+
+    label: str | None
+
+    def __new__(cls, value: str, label: str | None = None):
+        instance = super().__new__(cls, value)
+        instance.label = label
+        return instance
+
+
+def label_of(model) -> str | None:
+    return getattr(model, "label", None)
 
 FAILURES = (
     AIUnavailable,
@@ -214,7 +235,7 @@ def blocked_decision(snapshot: MarketSnapshot) -> AIDecision:
     return AIDecision(
         action="wait",
         confidence=0.0,
-        reason="ai_unavailable_block_mode: AI_FALLBACK_MODE=BLOCK_ON_AI_FAILURE blocks new entries",
+        reason="no_ai_approval: no valid AI approval (timeout, error, invalid reply or open circuit)",
         suggested_risk_percent=0.1,
         suggested_target_profit=0.0,
         suggested_sl_distance=0.0,
@@ -271,6 +292,7 @@ class AIBrain:
         self.limits = limits
         self.status_listener = status_listener
         self.provider, self.deep_provider = provider, deep_provider
+        self.trailing_provider = None  # Optional dedicated role=trailing registry entries.
         self.journal, self.adjuster, self.notifier = journal, adjuster, notifier
         self.circuit = CircuitBreaker(
             settings.ai_circuit_failures, settings.ai_circuit_cooldown_seconds, monotonic=monotonic
@@ -286,13 +308,31 @@ class AIBrain:
         self.stats = {"ai": 0, "cache": 0, "rule_fallback": 0, "ai_blocked": 0, "failures": 0, "retries": 0}
 
     @classmethod
-    def from_settings(cls, settings: Settings, clock: Clock, **kwargs) -> AIBrain:
-        """Groq/OpenAI-compatible providers from settings (fast = OPENAI_MODEL, deep = AI_DEEP_MODEL)."""
-        from ai.openai_client import OpenAIClient
+    def from_settings(
+        cls, settings: Settings, clock: Clock, *, provider_listener=None, transports=None, **kwargs
+    ):
+        """AI_PROVIDERS registry (decision + deep roles) with per-label failover circuits.
 
-        provider = OpenAIClient(settings) if settings.ai_provider == "openai" else None
-        deep = OpenAIClient(settings, model=settings.ai_deep_model) if provider is not None else None
-        return cls(settings, clock, provider=provider, deep_provider=deep, **kwargs)
+        With no AI_PROVIDERS the legacy settings become one registry entry, so a single Groq setup
+        (AI_PROVIDER=openai_compatible, OPENAI_BASE_URL, OPENAI_MODEL) works unchanged. Local Ollama
+        stays on the reviewed supervisor path (AIFirstReviewer delegates when there is no provider).
+        """
+        from ai.provider_registry import build_role
+
+        if settings.ai_provider == "disabled":
+            return cls(settings, clock, provider=None, deep_provider=None, **kwargs)
+        if not settings.ai_providers and settings.ai_provider != "openai":
+            return cls(settings, clock, provider=None, deep_provider=None, **kwargs)
+        common = {"transports": transports, "listener": provider_listener}
+        provider = build_role(settings, "decision", **common)
+        deep = build_role(settings, "deep", **common) if provider is not None else None
+        brain = cls(settings, clock, provider=provider, deep_provider=deep, **kwargs)
+        trailing = build_role(settings, "trailing", **common)
+        if trailing is not None and settings.ai_providers and any(
+            e.role == "trailing" for e in settings.ai_registry() if e.enabled
+        ):
+            brain.trailing_provider = trailing
+        return brain
 
     @property
     def mode(self) -> str:
@@ -312,6 +352,8 @@ class AIBrain:
     ):
         """Return (validated contract, model, simulated) or raise one of FAILURES. Never partial."""
         provider = self.deep_provider if deep else self.provider
+        if kind == "trailing" and self.trailing_provider is not None:
+            provider = self.trailing_provider
         circuit = self.deep_circuit if deep else self.circuit
         if provider is None or not getattr(provider, "configured", True):
             raise AIUnavailable("provider_not_configured")
@@ -322,6 +364,9 @@ class AIBrain:
             {"role": "user", "content": "JSON input:\n" + canonical_json(payload)},
         ]
         limit = timeout if timeout is not None else self.settings.ai_timeout_seconds
+        from ai.provider_registry import DEADLINE
+
+        token = DEADLINE.set(asyncio.get_running_loop().time() + limit)
         try:
             async with asyncio.timeout(limit):  # ONE budget for the first attempt and every retry.
                 for attempt in range(retries + 1):
@@ -351,12 +396,82 @@ class AIBrain:
                 if self.status_listener is not None and not deep:
                     self.status_listener("rule", "circuit_open:" + type(exc).__name__)
             raise
+        finally:
+            DEADLINE.reset(token)
         if circuit.success():
             if self.notifier is not None:
                 self.notifier.circuit_closed(deep=deep)
             if self.status_listener is not None and not deep:
                 self.status_listener("ai", "circuit_closed")
-        return reply, content.model, bool(getattr(content, "simulated", False))
+        label = getattr(content, "provider", None)
+        return reply, ProviderModel(content.model, label), bool(getattr(content, "simulated", False))
+
+    async def _ask_all(self, payload: dict):
+        """AI_DECISION_MODE=all_must_approve: every enabled decision AI is asked (no failover).
+
+        Any unavailable/invalid member => failure (no trade). All members must OPEN the SAME side with
+        confidence >= threshold; the combined decision is the most conservative (lowest confidence)
+        reply, labelled ``a+b``. Otherwise the first non-approving VALID reply is final.
+        """
+        provider = self.provider
+        members = getattr(provider, "members", None)
+        if not members or len(members) < 2:
+            return await self._ask("decision", payload)
+        if not self.circuit.allow():
+            raise AIUnavailable("circuit_open")
+        messages = [
+            {"role": "system", "content": SYSTEM_PROMPTS["decision"]},
+            {"role": "user", "content": "JSON input:\n" + canonical_json(payload)},
+        ]
+        schema = STRICT_SCHEMAS["decision"]
+
+        async def one(member):
+            content = await self.queue.run(lambda: provider.ask_member(member, messages, schema))
+            return decode("decision", content.content), content
+
+        try:
+            async with asyncio.timeout(self.settings.ai_timeout_seconds):
+                answers = await asyncio.gather(*(one(m) for m in members), return_exceptions=True)
+            for answer in answers:
+                if isinstance(answer, BaseException):
+                    raise answer
+        except asyncio.CancelledError:
+            self.circuit.trial_in_flight = False
+            raise
+        except FAILURES as exc:
+            self.stats["failures"] += 1
+            if self.circuit.failure():
+                if self.notifier is not None:
+                    self.notifier.circuit_opened(reason=type(exc).__name__, failures=self.circuit.consecutive)
+                if self.status_listener is not None:
+                    self.status_listener("rule", "circuit_open:" + type(exc).__name__)
+            raise
+        if self.circuit.success():
+            if self.notifier is not None:
+                self.notifier.circuit_closed()
+            if self.status_listener is not None:
+                self.status_listener("ai", "circuit_closed")
+        simulated = any(bool(getattr(c, "simulated", False)) for _, c in answers)
+        threshold = self.settings.ai_confidence_threshold
+        actions = {reply.action for reply, _ in answers}
+        if (
+            len(actions) == 1
+            and all(reply.opens for reply, _ in answers)
+            and all(reply.confidence >= threshold for reply, _ in answers)
+        ):
+            reply, _ = min(answers, key=lambda item: item[0].confidence)
+            label = "+".join(getattr(c, "provider", "?") for _, c in answers)
+            model = "+".join(c.model for _, c in answers)[:128]
+            return reply, ProviderModel(model, label[:64]), simulated
+        for reply, content in answers:
+            if not (reply.opens and reply.confidence >= threshold and len(actions) == 1):
+                if reply.opens and len(actions) > 1:
+                    # Disagreeing sides: an explicit, final WAIT attributed to the dissenting AI.
+                    note = ("all_must_approve: AIs disagree; " + reply.reason)[:500]
+                    reply = reply.model_copy(update={"action": "wait", "reason": note})
+                return reply, ProviderModel(content.model, getattr(content, "provider", None)), simulated
+        reply, content = answers[0]
+        return reply, ProviderModel(content.model, getattr(content, "provider", None)), simulated
 
     # -- decisions ----------------------------------------------------------------------------
     def gate(
@@ -397,6 +512,12 @@ class AIBrain:
     def _journal(self, kind, snapshot_summary, decision, *, source, model, executable, reasons, **extra):
         if self.journal is None:
             return None
+        if source in {"ai", "cache"}:
+            extra.setdefault("provider_label", label_of(model) or "unknown")
+        elif source == "rule_fallback":
+            extra.setdefault("provider_label", RULE_FALLBACK_LABEL)
+        else:
+            extra.setdefault("provider_label", "none")
         adjustments = {}
         if isinstance(decision, AIDecision):
             adjustments = {
@@ -441,16 +562,19 @@ class AIBrain:
             source = "cache"
         else:
             try:
-                decision, model, simulated = await self._ask(
-                    "decision",
-                    prompt,
-                    retries=self.settings.ai_max_retries if kind == "entry" else 0,
-                )
+                if self.settings.ai_decision_mode == "all_must_approve" and kind == "entry":
+                    decision, model, simulated = await self._ask_all(prompt)
+                else:
+                    decision, model, simulated = await self._ask(
+                        "decision",
+                        prompt,
+                        retries=self.settings.ai_max_retries if kind == "entry" else 0,
+                    )
                 self.cache.put(key, (decision, model, simulated))
             except FAILURES as exc:
-                failure = type(exc).__name__ if not isinstance(exc, AIUnavailable) else str(exc)
-                if self._fallback_mode() == BLOCK_MODE:
-                    LOG.warning("AI_FALLBACK: AI unavailable, blocking new entries")
+                failure = type(exc).__name__ if not isinstance(exc, AIUnavailable) else exc.code
+                if not self.rule_fallback_allowed():
+                    LOG.warning("AI_FALLBACK: no valid AI approval, blocking new entries (%s)", failure)
                     decision, source, model = blocked_decision(snapshot), "ai_blocked", BLOCKED_MODEL
                 else:
                     LOG.warning("AI_FALLBACK: AI unavailable, using technical fallback")
@@ -462,9 +586,7 @@ class AIBrain:
         self.stats[source] += 1
         reasons = self.gate(decision, snapshot, trades_today=trades_today)
         if source == "ai_blocked":
-            reasons = (*reasons, "ai_unavailable_block_mode")
-        if source == "rule_fallback" and not self.settings.ai_rule_fallback_enabled and decision.opens:
-            reasons = (*reasons, "rule_fallback_disabled")
+            reasons = (*reasons, NO_AI_APPROVAL)
         journal_id = self._journal(
             kind,
             snapshot.summary(),
@@ -501,7 +623,24 @@ class AIBrain:
         )
         if self.notifier is not None:
             self.notifier.decision(result, snapshot.symbol)
+            blocked = getattr(self.notifier, "blocked", None)
+            if source == "ai_blocked" and kind == "entry" and blocked is not None:
+                blocked(snapshot.symbol, failure or "unavailable")
         return result
+
+    def rule_fallback_allowed(self) -> bool:
+        """RULE_FALLBACK entries need ALL of: AI_REQUIRE_APPROVAL=false, AI_RULE_FALLBACK_ENABLED=true
+        and the owner TECHNICAL_ONLY mode. Otherwise an AI failure is ``no_ai_approval``."""
+        cfg = self.settings
+        return (
+            not cfg.ai_require_approval
+            and cfg.ai_rule_fallback_enabled
+            and self._fallback_mode() == "TECHNICAL_ONLY"
+        )
+
+    def provider_status(self) -> list[dict]:
+        status = getattr(self.provider, "status", None)
+        return status() if status is not None else []
 
     def _fallback_mode(self) -> str:
         try:
@@ -519,7 +658,7 @@ class AIBrain:
                 "trailing", payload, timeout=timeout or self.settings.ai_trailing_timeout_seconds
             )
         except FAILURES as exc:
-            return None, None, type(exc).__name__ if not isinstance(exc, AIUnavailable) else str(exc)
+            return None, None, type(exc).__name__ if not isinstance(exc, AIUnavailable) else exc.code
         if reply.decision not in allowed:
             return None, model, "decision_not_allowed_at_threshold"
         return reply, model, None
@@ -544,7 +683,8 @@ class AIBrain:
             return None, None
 
     async def close(self):
-        for provider in {id(p): p for p in (self.provider, self.deep_provider) if p is not None}.values():
+        providers = (self.provider, self.deep_provider, self.trailing_provider)
+        for provider in {id(p): p for p in providers if p is not None}.values():
             closer = getattr(provider, "close", None)
             if closer is not None:
                 await closer()

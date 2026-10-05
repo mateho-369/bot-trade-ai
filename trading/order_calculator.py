@@ -118,6 +118,8 @@ class OrderCalculator:
         if loss <= ZERO or margin < ZERO or not margin.is_finite():
             raise RiskViolation("invalid native loss/margin valuation")
         limit = min(meta.volume_max, probe * budget / loss)
+        if self.settings.demo_min_lot_only:
+            limit = min(limit, probe)  # Demo fast track / news-unavailable demo: broker minimum lot only.
         if margin > ZERO:
             limit = min(limit, probe * available_margin / margin)
         if meta.volume_limit > ZERO:

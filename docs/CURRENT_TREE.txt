@@ -29,11 +29,14 @@ mt5_ai_reflex_bot/
 │   ├── owner_guard.py
 │   ├── portable_model.py
 │   ├── prompt_templates.py
+│   ├── provider_registry.py
 │   ├── replay_binding.py
 │   ├── schemas.py
 │   ├── strategy_optimizer.py
 │   ├── suggestion_store.py
 │   ├── trade_analyzer.py
+│   ├── trade_attribution.py
+│   ├── trade_audit.py
 │   └── walk_forward.py
 ├── app/
 │   ├── __init__.py
@@ -135,6 +138,7 @@ mt5_ai_reflex_bot/
 │   ├── BACKTESTING.md
 │   ├── BACKTEST_CONTRACT_SCHEMAS.json
 │   ├── CURRENT_TREE.txt
+│   ├── DEMO_QUICKSTART.md
 │   ├── DEPLOYMENT_SCRIPT_SOURCE_CHECKS.json
 │   ├── DEPLOYMENT_WINDOWS.md
 │   ├── MIGRATIONS.md
@@ -247,6 +251,7 @@ mt5_ai_reflex_bot/
 │   ├── .gitkeep
 │   ├── __init__.py
 │   ├── audit_backtest.py
+│   ├── audit_trades.py
 │   ├── backtest.py
 │   ├── backup_db.py
 │   ├── build_release_manifest.py
@@ -263,6 +268,7 @@ mt5_ai_reflex_bot/
 │   ├── run_mt5_background.vbs
 │   ├── run_owner_interface.py
 │   ├── runtime_status.py
+│   ├── setup_demo.ps1
 │   ├── smoke_ai.py
 │   ├── smoke_ai_first.py
 │   ├── smoke_backtest.py
@@ -357,6 +363,8 @@ mt5_ai_reflex_bot/
 │   ├── test_candle_patterns.py
 │   ├── test_cent_account.py
 │   ├── test_database.py
+│   ├── test_demo_cycle_e2e.py
+│   ├── test_demo_fast_track.py
 │   ├── test_execution.py
 │   ├── test_feature_engine.py
 │   ├── test_foundation_cli.py
@@ -374,6 +382,7 @@ mt5_ai_reflex_bot/
 │   ├── test_mt5_client.py
 │   ├── test_news_alerts.py
 │   ├── test_news_calendar.py
+│   ├── test_news_demo_defaults.py
 │   ├── test_news_diagnostics.py
 │   ├── test_news_evidence_cache.py
 │   ├── test_news_http.py
@@ -400,6 +409,7 @@ mt5_ai_reflex_bot/
 │   ├── test_owner_resume_fence.py
 │   ├── test_position_review_binding.py
 │   ├── test_preflight_checks.py
+│   ├── test_provider_registry.py
 │   ├── test_readiness_dependencies.py
 │   ├── test_readiness_files.py
 │   ├── test_readiness_host.py
@@ -482,6 +492,7 @@ mt5_ai_reflex_bot/
 │   ├── trade_logger.py
 │   ├── trailing_engine.py
 │   └── types.py
+├── .env.demo.example
 ├── .env.example
 ├── .gitattributes
 ├── .gitignore

@@ -465,6 +465,28 @@ FIXTURE["alerts"] = {
     "unacknowledged": 2,
     "table_present": True,
 }
+FIXTURE["ai_stats"] = {
+    "labels": [
+        {
+            "label": "groq",
+            "approvals": 4,
+            "rejections": 9,
+            "trades": 3,
+            "closed": 2,
+            "win_rate": 50.0,
+            "net_profit": "1.20",
+            "avg_confidence": 81.5,
+            "failures": 1,
+        }
+    ],
+    "configured": [
+        {"label": "groq", "model": "fixture-model", "role": "decision", "priority": 0, "enabled": True}
+    ],
+    "decision_mode": "first_available",
+    "require_approval": True,
+    "recent_trades": [],
+}
+FIXTURE["audit"] = {"checked": 3, "flags": [], "counts": {}, "clean": True}
 FIXTURE["dashboard"]["positions"] = FIXTURE["positions"]["items"]
 
 

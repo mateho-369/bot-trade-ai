@@ -24,7 +24,7 @@ import asyncio
 import json
 from dataclasses import replace
 
-from ai.ai_brain import AIBrain, decimal_risk
+from ai.ai_brain import NO_AI_APPROVAL, AIBrain, decimal_risk, label_of
 from ai.market_awareness import MarketAwarenessEngine, NewsContext
 from core.settings import Settings
 from strategy.base_strategy import AIEntryReview, SignalResult
@@ -89,8 +89,8 @@ class AIFirstReviewer:
         )
         now = self.clock.now()
         if result.source == "ai_blocked":
-            self._mark(result, None, note="ai_unavailable_block_mode")
-            return None  # BLOCK_ON_AI_FAILURE: an outage never opens a new entry.
+            self._mark(result, None, note=NO_AI_APPROVAL)
+            return None  # No valid AI approval (AI_REQUIRE_APPROVAL / BLOCK mode): never a new entry.
         if result.source == "rule_fallback":
             review = rule_fallback_review(
                 proposal,
@@ -138,7 +138,7 @@ class AIFirstReviewer:
             news.evidence_hash,
             verdict,
             float(decision.confidence),
-            "test" if simulated else "openai",
+            "test" if simulated else review_label(result.model),
             risk,
             request_hash=snapshot.digest,
             provider_model=result.model,
@@ -165,6 +165,9 @@ class AIFirstReviewer:
                 symbol=proposal.symbol,
                 signal_id=proposal.signal_id,
                 model=None if review is None else review.provider_model,
+                provider_label=None
+                if review is None
+                else ("RULE_FALLBACK" if review.provider == "rule_fallback" else review.provider),
                 input_summary={
                     "technical_score": proposal.score,
                     "side": getattr(proposal.side, "value", None),
@@ -185,3 +188,11 @@ class AIFirstReviewer:
             final_action="approved_to_risk_engine" if approved else "vetoed",
             rejection_reason=reason,
         )
+
+
+def review_label(model) -> str:
+    """The registry label recorded on the review (never a hard-coded provider name)."""
+    label = label_of(model)
+    if isinstance(label, str) and label and label.lower() == label and label not in {"test", "replay"}:
+        return label[:64]
+    return "unlabelled"

@@ -35,8 +35,18 @@ class JSONTransport:
             async with self._get_client().stream(
                 "POST", url, json=payload, headers=request_headers, follow_redirects=False
             ) as response:
-                if response.status_code in {408, 429, 500, 502, 503, 504, 404, 401, 403}:
-                    raise AIUnavailable("http_unavailable")
+                status = response.status_code
+                if status in {408, 429, 500, 502, 503, 504, 404, 401, 403}:
+                    # Distinct reasons: the registry fails over ONLY on timeout/429/5xx, never on auth.
+                    raise AIUnavailable(
+                        "http_429"
+                        if status == 429
+                        else "http_timeout"
+                        if status == 408
+                        else "http_5xx"
+                        if status >= 500
+                        else "http_auth_or_not_found"
+                    )
                 if response.status_code != 200:
                     raise AIInvalidResponse("unexpected_http_status")
                 if (

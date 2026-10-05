@@ -290,6 +290,9 @@ class StageGate:
         for trade in trades:
             meta = trade.features_json["execution"]
             intent = intents.get(trade.order_intent_id)
+            if intent is not None and intent.request.get("demo_fast_track"):
+                # DEMO_FAST_TRACK orders skipped the stage chain: never promotion evidence.
+                raise TradingDisabled("demo_fast_track trades are not promotion evidence")
             if (
                 intent is None
                 or intent.state != "reconciled"
@@ -387,6 +390,30 @@ class StageGate:
                 "evidence_ids": evidence_ids,
             }
         )
+
+    def demo_fast_track_eligible(self, account: AccountInfo) -> bool:
+        """DEMO_FAST_TRACK scope: owner setting AND DEMO mode AND native MT5 AND the TERMINAL itself
+        reports a DEMO trade-mode account. REAL, CONTEST, unknown accounts and LIVE fail closed."""
+        cfg = self.settings
+        return bool(
+            cfg.demo_fast_track
+            and cfg.mode == OperatingMode.DEMO
+            and not cfg.live_trading
+            and self.profile.data_source == SourceKind.MT5
+            and isinstance(account, AccountInfo)
+            and account.source == SourceKind.MT5
+            and account.kind == AccountKind.DEMO
+        )
+
+    def entry_evidence(self, session: Session, account: AccountInfo) -> tuple[tuple[int, ...], bool]:
+        """(evidence ids, demo_fast_track). Normal evidence first; the fast track never applies to
+        LIVE/REAL and never creates evidence. Raises TradingDisabled exactly like required_evidence."""
+        try:
+            return self.required_evidence(session, account), False
+        except TradingDisabled:
+            if self.demo_fast_track_eligible(account):
+                return (), True
+            raise
 
     def live_confirmed(
         self, session: Session, account: AccountInfo, session_id: str, evidence: tuple[int, ...]

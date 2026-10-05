@@ -51,6 +51,8 @@ class RuntimeScheduler:
             "ai_config_review": self.ai_config_review,
             "ai_nightly_review": self.ai_nightly_review,
             "ai_status": self.ai_status,
+            "ai_attribution": self.ai_attribution,
+            "trade_audit": self.trade_audit,
             "alerts": self.alerts,
         }
 
@@ -286,6 +288,14 @@ class RuntimeScheduler:
             return {"state": "disabled"}
         return await center.flush(getattr(r.telegram, "bot", None))
 
+    async def ai_attribution(self):
+        layer = getattr(self.resources, "ai_first", None)
+        return {"state": "disabled"} if layer is None else await durable_call(layer.sync_attribution)
+
+    async def trade_audit(self):
+        layer = getattr(self.resources, "ai_first", None)
+        return {"state": "disabled"} if layer is None else await durable_call(layer.trade_audit)
+
     async def ai_learning(self):
         layer = getattr(self.resources, "ai_first", None)
         return {"state": "disabled"} if layer is None else await layer.learn_closed_trades()
@@ -344,7 +354,7 @@ class RuntimeScheduler:
             "position_reviews": cfg.ai_position_review_seconds,
             **({"alerts": 5} if getattr(self.resources, "alerts", None) is not None else {}),
             **(
-                {"ai_learning": 300, "ai_config_review": 1800, "ai_status": 60}
+                {"ai_learning": 300, "ai_config_review": 1800, "ai_status": 60, "ai_attribution": 60}
                 if getattr(self.resources, "ai_first", None) is not None
                 else {}
             ),
@@ -359,6 +369,11 @@ class RuntimeScheduler:
             (
                 "ai_nightly_review",
                 (cfg.runtime_report_hour_utc + 1) % 24,
+                getattr(self.resources, "ai_first", None) is not None,
+            ),
+            (
+                "trade_audit",
+                (cfg.runtime_report_hour_utc + 2) % 24,
                 getattr(self.resources, "ai_first", None) is not None,
             ),
         ):

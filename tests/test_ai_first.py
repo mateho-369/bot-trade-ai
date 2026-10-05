@@ -31,6 +31,13 @@ from trading.mock_mt5 import MockMT5Client
 from trading.risk_types import RuntimeProfile
 from trading.types import ManualClock, Side, SourceKind, TradingDisabled
 
+# Rule-fallback decisions are opt-in (AI_REQUIRE_APPROVAL=true blocks by default).
+RULE_OPT_IN = {
+    "ai_fallback_mode": "TECHNICAL_ONLY",
+    "ai_require_approval": False,
+    "ai_rule_fallback_enabled": True,
+}
+
 
 def decision_json(**changes):
     values = dict(
@@ -293,7 +300,7 @@ async def test_ai_decision_is_executable_only_at_or_above_threshold(market):
 )
 async def test_ai_failure_falls_back_to_the_technical_score_without_blocking(market, provider):
     settings, database, clock, _ = market
-    settings = settings.model_copy(update={"ai_timeout_seconds": 1, "ai_fallback_mode": "TECHNICAL_ONLY"})
+    settings = settings.model_copy(update={"ai_timeout_seconds": 1, **RULE_OPT_IN})
     snapshot = await snapshot_for(market)
     brain = AIBrain(settings, clock, provider=provider)
     result = await brain.decide(snapshot)
@@ -318,7 +325,7 @@ async def test_three_failures_switch_to_rule_mode_and_notify_owner_once(market):
     settings, database, clock, _ = market
     notes, provider = Notes(), Provider("broken")
     brain = AIBrain(
-        settings.model_copy(update={"ai_decision_cache_seconds": 0, "ai_fallback_mode": "TECHNICAL_ONLY"}),
+        settings.model_copy(update={"ai_decision_cache_seconds": 0, **RULE_OPT_IN}),
         clock,
         provider=provider,
         notifier=notes,
@@ -551,7 +558,7 @@ async def test_ai_first_reviewer_valid_wait_is_final_and_never_shopped_to_rules(
 
 async def test_ai_first_reviewer_outage_uses_the_canonical_rule_fallback(tmp_path):
     signals, execution = await make_signal_runtime(
-        tmp_path, ai_queue_min_interval_ms=0, ai_fallback_mode="TECHNICAL_ONLY", ai_max_retries=0
+        tmp_path, ai_queue_min_interval_ms=0, ai_max_retries=0, **RULE_OPT_IN
     )
     try:
         proposal = await signals.analyze("EURUSD")

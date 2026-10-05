@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from dataclasses import dataclass
 from datetime import datetime
@@ -14,7 +15,7 @@ from ai.openai_client import OpenAIClient
 from ai.prompt_templates import AIRequest
 from ai.schemas import Reply, decode_reply
 from core.database import Database
-from core.settings import Settings
+from core.settings import Settings, legacy_ai_label
 from trading.types import Clock, aware_utc
 
 
@@ -78,17 +79,48 @@ class AIRouter:
         providers: tuple[AIProvider, ...] | None = None,
     ):
         self.settings, self.database, self.clock = settings, database, clock
-        selected = providers if providers is not None else (OllamaClient(settings), OpenAIClient(settings))
-        if (
-            len(selected) > 2
-            or len({p.name for p in selected}) != len(selected)
-            or any(p.name not in {"ollama", "openai"} for p in selected)
+        if providers is None:
+            from ai.provider_registry import build_client
+
+            entries = sorted(
+                (e for e in settings.ai_registry() if e.enabled and e.role in {"decision", "review"}),
+                key=lambda e: (e.priority, e.label),
+            )
+            selected = tuple(build_client(settings, e) for e in entries)
+            if not settings.ai_providers:  # Legacy pair keeps both reviewed clients available.
+                selected = (OllamaClient(settings), OpenAIClient(settings))
+            self.order = tuple(e.label for e in entries)
+        else:
+            selected = tuple(providers)
+            self.order = None
+        # Identity is the registry LABEL (any number of providers; labels must be unique).
+        names = [getattr(p, "name", "") for p in selected]
+        if len(set(names)) != len(names) or any(
+            not isinstance(n, str) or not re.fullmatch(r"[a-z0-9][a-z0-9_.-]{0,31}", n) for n in names
         ):
             raise ValueError("exact configured provider identities required")
         self.providers = {p.name: p for p in selected}
         self.circuits = {p.name: Circuit() for p in selected}
         self._slots = asyncio.Semaphore(settings.ai_max_concurrent)
         self._closed = False
+
+    def _order(self) -> tuple[str, ...]:
+        """Registry priority order; legacy AI_PROVIDER/AI_FALLBACK_PROVIDER map to their labels."""
+        cfg = self.settings
+        if cfg.ai_providers and self.order is not None:
+            return self.order
+        legacy = []
+        for kind in (cfg.ai_provider, cfg.ai_fallback_provider):
+            if kind == "disabled":
+                continue
+            base = cfg.ollama_base_url if kind == "ollama" else cfg.openai_base_url
+            for label in (legacy_ai_label(kind, base), kind):
+                if label in self.providers:
+                    legacy.append(label)
+                    break
+        if cfg.ai_providers:
+            legacy = [n for n in self.providers]  # Injected clients: given order.
+        return tuple(dict.fromkeys(legacy))
 
     async def _audit(self, action, request, **details):
         await asyncio.to_thread(
@@ -115,7 +147,7 @@ class AIRouter:
             await self._audit("ai.disabled_veto", request)
             return None, "disabled"  # A disabled primary never silently selects a fallback.
         started = aware_utc(self.clock.now())
-        order = tuple(dict.fromkeys((cfg.ai_provider, cfg.ai_fallback_provider)))
+        order = self._order()
         try:
             async with asyncio.timeout(cfg.ai_timeout_seconds):
                 async with self._slots:

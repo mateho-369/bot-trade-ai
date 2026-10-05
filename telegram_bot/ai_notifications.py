@@ -12,12 +12,42 @@ trailing actions/fallbacks are sent – not every "wait".
 
 from __future__ import annotations
 
+import time
 from collections import deque
 
 from core.security import sanitize_text
 
 HEADER = "MT5 AI ReflexBot · AI"
 MAX_OUTBOX = 50
+BLOCK_NOTICE_SECONDS = 900  # One "BLOCKED: no AI approval" line per symbol per 15 minutes.
+
+
+def approved_by(label, model, confidence) -> str:
+    """'Approved by: groq (qwen/qwen3.8-27b) conf 85%' / 'RULE_FALLBACK' / 'unknown'."""
+    if label == "RULE_FALLBACK":
+        return "RULE_FALLBACK (technical score, NOT an AI decision)"
+    if not label or label in {"unknown", "none"}:
+        return "unknown (no AI approval linked)"
+    conf = "?" if confidence is None else f"{float(confidence):.0f}"
+    return f"Approved by: {label} ({model or '?'}) conf {conf}%"
+
+
+def format_trade_opened(item: dict) -> str:
+    tag = " · DEMO_FAST_TRACK (min lot, not promotion evidence)" if item.get("demo_fast_track") else ""
+    return (
+        f"{HEADER} · trade OPENED · {item['symbol']} {item['side'].upper()} {item['volume']}{tag}\n"
+        + approved_by(item.get("decided_by"), item.get("ai_model"), item.get("ai_confidence"))
+    )
+
+
+def format_trade_closed(item: dict) -> str:
+    return (
+        f"{HEADER} · trade CLOSED · {item['symbol']} {item['side'].upper()}\n"
+        f"Profit/loss: {item['profit']} {item.get('currency') or ''} · reason: "
+        f"{item.get('close_reason') or item.get('close_by') or 'unknown'}\n"
+        f"Entry AI: {item.get('decided_by') or 'unknown'} · "
+        f"trailing: {item.get('trailing_by') or 'MECHANICAL'}"
+    )
 
 
 def format_decision(result, symbol: str) -> str:
@@ -26,9 +56,13 @@ def format_decision(result, symbol: str) -> str:
         "rule_fallback": "TECHNICAL FALLBACK (AI unavailable)",
         "ai_blocked": "BLOCKED (AI unavailable, BLOCK_ON_AI_FAILURE)",
     }.get(result.source, f"AI ({result.source})")
+    label = getattr(result.model, "label", None)
+    if result.source == "rule_fallback":
+        label = "RULE_FALLBACK"
     return (
         f"{HEADER} decision · {symbol}\n"
         f"{decision.action} · confidence {decision.confidence:.0f} · {mode}\n"
+        f"{approved_by(label, str(result.model), decision.confidence)}\n"
         f"Market: {decision.market_condition} · news risk {decision.news_risk}\n"
         f"Suggested risk {decision.suggested_risk_percent:.2f}% (never above your configured cap)\n"
         f"Reason: {decision.reason[:300]}\n"
@@ -96,6 +130,7 @@ class AIOwnerNotifier:
         self.mode_provider = mode_provider
         self.outbox: deque[str] = deque(maxlen=MAX_OUTBOX)
         self.dropped = 0
+        self._blocked_at: dict[str, float] = {}
 
     def _push(self, text: str) -> None:
         if self.settings.telegram_owner_id is None:
@@ -108,6 +143,31 @@ class AIOwnerNotifier:
     def decision(self, result, symbol: str) -> None:
         if result.kind == "entry" and result.executable and result.decision.opens:
             self._push(format_decision(result, symbol))
+
+    def blocked(self, symbol: str, reason: str) -> None:
+        """One line when an entry is refused for lack of a valid AI approval (rate-limited)."""
+        now = time.monotonic()
+        last = self._blocked_at.get(symbol)
+        if last is not None and now - last < BLOCK_NOTICE_SECONDS:
+            return
+        self._blocked_at[symbol] = now
+        self._push(f"BLOCKED: no AI approval · {symbol} ({str(reason)[:60]})")
+
+    def trade_opened(self, item: dict) -> None:
+        self._push(format_trade_opened(item))
+
+    def trade_closed(self, item: dict) -> None:
+        self._push(format_trade_closed(item))
+
+    def provider_event(self, event: str, label: str, detail: str) -> None:
+        """Per-label registry events. Failures are counted (audit); circuit changes are pushed."""
+        if event == "circuit_open":
+            self._push(
+                f"{HEADER} · provider {label} circuit OPEN ({detail}). "
+                "Other configured AIs are tried in priority order; no AI approval => no new entry."
+            )
+        elif event == "circuit_closed":
+            self._push(f"{HEADER} · provider {label} circuit CLOSED (answering again).")
 
     def circuit_opened(self, *, reason: str, failures: int, deep: bool = False) -> None:
         try:

@@ -27,6 +27,8 @@ READS = {
     "ai": "ai_journal",
     "ai_fallback_status": "ai_fallback",
     "limits": "limits",
+    "ai_stats": "ai_stats",
+    "audit": "audit",
 }
 ALERT_LEVELS = {"critical": "CRITICAL", "error": "ERROR", "warning": "WARNING", "info": "INFO"}
 

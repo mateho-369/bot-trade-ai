@@ -49,9 +49,17 @@ Details: `docs/AI_FIRST_ARCHITECTURE.md` and `docs/TRAILING_AI_DESIGN.md`.
 - **Alert Center**: INFO / WARNING / ERROR / CRITICAL alerts to Telegram, with dedup and a rate
   limit. CRITICAL auto-pauses new entries. Mini App **Alerts** page.
 - **Windows launchers**: `install.bat`, `start.bat`, `start_demo.bat`.
+- **AI approval required** (`AI_REQUIRE_APPROVAL=true`): no valid AI approval means no trade, journal reason
+  `no_ai_approval` and one Telegram line. The rule fallback is off by default; when on, its trades are labelled `RULE_FALLBACK`.
+- **Multi-AI registry** (`AI_PROVIDERS`, keys referenced by env-var name): failover only on timeout/429/5xx,
+  `AI_DECISION_MODE=first_available|all_must_approve`. A single Groq key still works as one entry.
+- **Who decided**: every trade records `decided_by`, the model, confidence, approval journal id and the
+  trailing AI. `/ai_stats` shows results per AI; `/audit` and `python -m scripts.audit_trades` check every trade.
+- **Demo today**: `DEMO_FAST_TRACK` (terminal-verified DEMO account only, minimum lot, never promotion evidence),
+  `scripts/setup_demo.ps1`, `.env.demo.example`, `docs/DEMO_QUICKSTART.md`.
 
 Details: `docs/ALERTS.md` and `docs/AI_FIRST_ARCHITECTURE.md`.
-**2,810 tests pass with no file skipped** (AI-FIRST recorded 2,762; Part 15 2,683; Part 14 2,528).
+**2,891 tests pass with no file skipped** (4-spec release 2,810; AI-FIRST 2,762; Part 15 2,683; Part 14 2,528).
 Lint/compile and the offline smokes pass.
 Actual Linux scope and remaining native/provenance limits are in `docs/VALIDATION.md`.
 See `docs/VALIDATION.md` for executed checks and limitations.

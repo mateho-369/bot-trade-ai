@@ -271,6 +271,8 @@ async def test_coalescing_and_max_instances_on_all_registered_jobs(system):
             "ai_config_review",
             "ai_nightly_review",
             "ai_status",
+            "ai_attribution",
+            "trade_audit",
             "alerts",
         }
         assert all(job.max_instances == 1 and job.coalesce for job in scheduled)
@@ -280,6 +282,7 @@ async def test_coalescing_and_max_instances_on_all_registered_jobs(system):
         assert str(jobs.scheduler.get_job("ai_config_review").trigger.interval) == "0:30:00"
         assert str(jobs.scheduler.get_job("ai_status").trigger.interval) == "0:01:00"
         assert str(jobs.scheduler.get_job("alerts").trigger.interval) == "0:00:05"
+        assert str(jobs.scheduler.get_job("ai_attribution").trigger.interval) == "0:01:00"
     finally:
         jobs.stop_accepting()
         jobs.finish()

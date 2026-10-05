@@ -89,6 +89,28 @@ The mode is set in `.env` (default) and switched at runtime by the owner only:
 kill switch, pause state, risk checks or the news block, which apply in both modes. Log lines:
 `AI_FALLBACK: AI unavailable, blocking new entries` / `... using technical fallback`.
 
+### AI approval required, registry, attribution and audit
+
+* **`AI_REQUIRE_APPROVAL=true` (default) overrides `TECHNICAL_ONLY`.** An entry needs a valid AI approval
+  at or above `AI_CONFIDENCE_THRESHOLD`. Otherwise the result is `ai_blocked`: the journal reason is
+  `no_ai_approval` and the owner gets one Telegram line ("BLOCKED: no AI approval", at most once per symbol
+  per 15 min). The technical score trades only when ALL of these hold: `AI_REQUIRE_APPROVAL=false`,
+  `AI_RULE_FALLBACK_ENABLED=true` (default false) and the owner mode is `TECHNICAL_ONLY`. Such trades are
+  labelled `RULE_FALLBACK`, never shown as an AI decision.
+* **Registry** (`ai/provider_registry.py`, `AI_PROVIDERS`). Each label has its own client and its own circuit,
+  and labels are asked in priority order. Failover happens ONLY on timeout, 429, 5xx, a missing key or an open
+  circuit. An auth error or an invalid reply means no trade. A valid reply (including wait/reject) is final.
+  `AI_DECISION_MODE=all_must_approve` asks every decision AI and records the label `a+b`. Failures and circuit
+  changes become `ai.provider_failure` / `ai.provider_circuit` audits; circuit changes also reach Telegram.
+* **Who decided** (`ai/trade_attribution.py`, additive `trade_attribution` table; core `trades` and
+  `SCHEMA_VERSION` are unchanged). It stores `decided_by`, `ai_model`, `ai_confidence`,
+  `approval_journal_id`, `trailing_by` (the AI label or `MECHANICAL`), `close_by` and `demo_fast_track`.
+  Trades from before this table read `unknown`. The link is exact: `link_execution` stamps the filled position
+  id on the approving journal row. Entry and close Telegram messages are sent once per trade.
+* **Audit** (`ai/trade_audit.py`, `/audit`, `python -m scripts.audit_trades`, daily job): flags
+  `NO_AI_APPROVAL`, `RULE_FALLBACK_TRADE`, `UNKNOWN_DECIDER`, `JOURNAL_MISMATCH` and `TRADE_AFTER_AI_WAIT`.
+  Any flag raises an Alert Center ERROR and a Telegram summary.
+
 ## Dynamic config: AI-dynamic trade frequency (two layers)
 
 **Layer 1 — AI-adjustable** (`config_history` + `dynamic_config`):

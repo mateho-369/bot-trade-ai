@@ -29,6 +29,8 @@ from ai.decision_journal import AIDecisionJournal, DecisionJournal
 from ai.learning_loop import LearningLoop
 from ai.market_awareness import MarketAwarenessEngine, NewsContext, PerformanceTracker
 from ai.ollama_client import ProviderContent
+from ai.trade_attribution import history, sync
+from ai.trade_audit import audit_trades, format_report
 from core.database import Database
 from core.models import Trade
 from core.security import sha256_json
@@ -41,6 +43,8 @@ from trading.position_manager import PositionManager
 from trading.risk_types import DecisionContext, NewsWindow
 from trading.trailing_engine import LockRegressionError, assert_never_loosens
 from trading.types import ManualClock, Side, SourceKind
+
+SMOKE_SIGNAL_ID = 1
 
 
 class SmokeSettings(Settings):
@@ -85,7 +89,7 @@ class ScriptedProvider:
                 "confidence": 75,
                 "reason": "SCRIPTED review",
             }
-        return ProviderContent("openai", "scripted-offline", json.dumps(body), simulated=True)
+        return ProviderContent("scripted", "scripted-offline", json.dumps(body), simulated=True)
 
 
 class DownProvider:
@@ -186,7 +190,7 @@ async def run(provider_name: str) -> dict:
             snapshot = await awareness.snapshot("EURUSD", news=NewsContext(state="clear"))
             prompt = snapshot.to_prompt()
             checks["snapshot_has_m5_m15_h1"] = set(prompt["timeframes"]) == {"M5", "M15", "H1"}
-            decision = await brain.decide(snapshot)
+            decision = await brain.decide(snapshot, signal_id=SMOKE_SIGNAL_ID)
             report["entry_decision"] = {
                 "source": decision.source,
                 "action": decision.decision.action,
@@ -206,8 +210,16 @@ async def run(provider_name: str) -> dict:
                     blocked.source == "ai_blocked" and not blocked.executable
                 )
                 brain.fallback_mode = lambda: "TECHNICAL_ONLY"
+                required = await brain.decide(snapshot)  # AI_REQUIRE_APPROVAL=true (default).
+                checks["require_approval_blocks_technical_mode"] = (
+                    required.source == "ai_blocked" and "no_ai_approval" in required.reasons
+                )
+                brain.settings = cfg.model_copy(
+                    update={"ai_require_approval": False, "ai_rule_fallback_enabled": True}
+                )
                 technical = await brain.decide(snapshot)
                 checks["technical_mode_uses_score"] = technical.source == "rule_fallback"
+                brain.settings = cfg
                 report["fallback_modes"] = {
                     "BLOCK_ON_AI_FAILURE": [blocked.source, blocked.executable],
                     "TECHNICAL_ONLY": [technical.source, technical.decision.action],
@@ -236,7 +248,14 @@ async def run(provider_name: str) -> dict:
             )
 
             # 3. Lock-first trailing on a PAPER position ------------------------------------------
-            await open_paper_position(engine, clock)
+            opened = await open_paper_position(engine, clock)
+            if decision.executable:  # Exactly what AIFirstLayer.link_execution records after a fill.
+                journal.link_signal(
+                    SMOKE_SIGNAL_ID,
+                    executed=True,
+                    position_id=opened.position_identifier,
+                    final_action="execution_filled",
+                )
             trailing_brain = (
                 brain if provider_name != "groq" else AIBrain(cfg, clock, provider=ScriptedProvider())
             )
@@ -281,6 +300,15 @@ async def run(provider_name: str) -> dict:
                 lesson = await learning.on_trade_closed(trade.id)
                 report["lessons"] = list(lesson.lessons)
                 checks["lesson_logged"] = bool(lesson.lessons)
+            # 5. Who decided + trade audit ----------------------------------------------------------
+            sync(database, clock, notifier=notifier)
+            audit = audit_trades(database, cfg, clock, run_sync=False)
+            report["audit"] = format_report(audit)
+            report["who_decided"] = [(h["decided_by"], h["trailing_by"]) for h in history(database)]
+            if decision.executable:
+                checks["audit_clean"] = audit["clean"] and audit["checked"] == 1
+            else:  # The smoke opened a position WITHOUT an AI approval: the audit must catch it.
+                checks["audit_flags_unapproved_trade"] = audit["counts"]["NO_AI_APPROVAL"] == 1
             report["notifications_queued"] = len(notifier.outbox)
             report["journal_stats"] = journal.stats()["groups"]
             report["checks"] = checks

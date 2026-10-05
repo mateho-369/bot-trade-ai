@@ -9,29 +9,37 @@ import httpx
 from ai.http_transport import JSONTransport
 from ai.json_validation import AIInvalidResponse, AIUnavailable
 from ai.ollama_client import ProviderContent
-from core.settings import Settings
+from core.settings import Settings, legacy_ai_label
 
 
 class OpenAIClient:
-    name = "openai"
-
     def __init__(
         self,
         settings: Settings,
         *,
         transport: httpx.AsyncBaseTransport | None = None,
         model: str | None = None,
+        base_url: str | None = None,
+        api_key: str | None = None,
+        label: str | None = None,
     ):
-        """``model`` overrides OPENAI_MODEL per client (e.g. AI_DEEP_MODEL for nightly reviews)."""
+        """``model`` overrides OPENAI_MODEL per client (e.g. AI_DEEP_MODEL for nightly reviews).
+
+        ``base_url``/``api_key``/``label`` come from one AI_PROVIDERS registry entry; the defaults are
+        the legacy OPENAI_* settings with a host-derived label (``groq`` for api.groq.com).
+        """
         self.settings = settings
         self.model = cfg_model = model if model is not None else settings.openai_model
         if not re.fullmatch(r"[A-Za-z0-9_./:@+-]{1,128}", cfg_model):
             raise AIUnavailable("invalid_model_identifier")
+        self.base_url = (base_url or settings.openai_base_url).rstrip("/")
+        self._api_key = api_key if api_key is not None else settings.openai_api_key.get_secret_value()
+        self.name = label or legacy_ai_label("openai", self.base_url)
         self.http = JSONTransport(settings, transport=transport)
 
     @property
     def configured(self):
-        return bool(self.settings.openai_api_key.get_secret_value())
+        return bool(self._api_key)
 
     async def complete(self, messages: list[dict], schema: dict) -> ProviderContent:
         cfg = self.settings
@@ -48,9 +56,9 @@ class OpenAIClient:
         if cfg.openai_reasoning_effort:
             payload["reasoning_effort"] = cfg.openai_reasoning_effort
         response = await self.http.post(
-            cfg.openai_base_url + "/chat/completions",
+            self.base_url + "/chat/completions",
             payload,
-            headers={"Authorization": "Bearer " + cfg.openai_api_key.get_secret_value()},
+            headers={"Authorization": "Bearer " + self._api_key},
         )
         try:
             choices, model = response["choices"], response["model"]

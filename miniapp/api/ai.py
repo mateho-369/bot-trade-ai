@@ -74,3 +74,15 @@ async def limits(request: Request, identity: Actor):
 async def ai_reset(request: Request, body: DirectRequest, identity: Actor):
     """Reset every AI adjustment to the owner defaults (audited)."""
     return await services(request).action(identity, "ai_reset", {}, body.request_id)
+
+
+@router.get("/ai_stats")
+async def ai_stats(request: Request, identity: Actor):
+    """Per-AI-label approvals, rejections, trades, win rate, net profit, avg confidence, failures."""
+    return await services(request).read(identity, "ai_stats")
+
+
+@router.get("/audit")
+async def trade_audit(request: Request, identity: Actor):
+    """Read-only trade audit: every trade must match a valid AI approval."""
+    return await services(request).read(identity, "audit")

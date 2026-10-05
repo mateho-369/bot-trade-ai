@@ -123,12 +123,21 @@ def deployment_preflight(
     report.findings.extend(findings)
     report.observations["configuration"] = observations
     if cfg is not None and not cfg.paper_trading:
-        report.add(
-            "paper_trading_disabled_in_file",
-            "blocked",
-            "PAPER_TRADING must remain true for this stage. Preflight observes configuration and never "
-            "rewrites it, credentials or control state.",
-        )
+        if cfg.demo_fast_track and cfg.mode.value == "demo" and not cfg.live_trading:
+            report.add(
+                "demo_fast_track_broker_stage",
+                "warning",
+                "Owner-approved DEMO_FAST_TRACK: DEMO broker orders only after the terminal itself reports a "
+                "DEMO account (REAL/unknown/LIVE fail closed), minimum lot, start paused, never promotion "
+                "evidence.",
+            )
+        else:
+            report.add(
+                "paper_trading_disabled_in_file",
+                "blocked",
+                "PAPER_TRADING must remain true for this stage. Preflight observes configuration and never "
+                "rewrites it, credentials or control state.",
+            )
 
     values = {}
     if env_name is not None:

@@ -43,6 +43,8 @@ COMMANDS = [
     ("limits", "AI-dynamic limits and hard caps"),
     ("alerts", "Recent alerts (add: critical)"),
     ("ack_all", "Acknowledge all alerts"),
+    ("ai_stats", "Per-AI approvals, trades, win rate, profit"),
+    ("audit", "Check every trade has a valid AI approval"),
 ]
 
 

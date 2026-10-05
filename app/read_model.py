@@ -119,12 +119,33 @@ class OwnerReadModel:
             query = query.where(Trade.status.in_(("open", "unknown")))
         with self.database.session() as session:
             rows = session.scalars(query.order_by(Trade.id.desc()).offset(offset).limit(limit)).all()
-            return {
-                "meta": self.meta(),
-                "items": [self._trade(r) for r in rows],
-                "limit": limit,
-                "offset": offset,
-            }
+            items = [self._trade(r) for r in rows]
+        attribution = self._attribution([item["id"] for item in items])
+        for item in items:
+            who = attribution.get(item["id"], {})
+            item["decided_by"] = who.get("decided_by", "unknown")
+            item["trailing_by"] = who.get("trailing_by", "MECHANICAL")
+            item["result"] = (
+                "open"
+                if item["closed_at"] is None
+                else ("win" if Decimal(item["profit_account"]) > 0 else "loss/flat")
+            )
+        return {"meta": self.meta(), "items": items, "limit": limit, "offset": offset}
+
+    def _attribution(self, trade_ids):
+        """Who-decided labels (trade_attribution); a missing table/row reads as unknown."""
+        if not trade_ids:
+            return {}
+        try:
+            from ai.trade_attribution import TradeAttribution
+
+            with self.database.session() as session:
+                rows = session.scalars(
+                    select(TradeAttribution).where(TradeAttribution.trade_id.in_(trade_ids))
+                ).all()
+                return {r.trade_id: {"decided_by": r.decided_by, "trailing_by": r.trailing_by} for r in rows}
+        except Exception:
+            return {}
 
     def dashboard(self):
         now = self.clock.now()

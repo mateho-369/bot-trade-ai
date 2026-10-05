@@ -95,7 +95,9 @@ async def test_default_block_mode_opens_no_entry_when_the_ai_is_down(tmp_path):
 
 
 async def test_technical_mode_good_signal_opens_a_paper_trade(tmp_path):
-    signals, execution, supervisor, _ = await groq_down(tmp_path)
+    signals, execution, supervisor, _ = await groq_down(
+        tmp_path, ai_require_approval=False, ai_rule_fallback_enabled=True
+    )
     try:
         set_fallback_mode(execution.database, execution.clock, "TECHNICAL_ONLY", owner_id=OWNER)
         ready = await signals.evaluate("EURUSD", reviewer=supervisor, news=news(signals.clock))
@@ -138,7 +140,7 @@ async def test_brain_block_mode_returns_a_non_executable_blocked_decision(market
     brain = AIBrain(settings, clock, provider=Provider("broken"))
     result = await brain.decide(await snapshot_for(market))
     assert result.source == "ai_blocked" and not result.executable
-    assert "ai_unavailable_block_mode" in result.reasons
+    assert "no_ai_approval" in result.reasons
 
 
 async def test_brain_retries_transient_failures_before_falling_back(market, monkeypatch):  # noqa: F811
@@ -159,12 +161,24 @@ async def test_brain_retries_transient_failures_before_falling_back(market, monk
 
 async def test_brain_follows_the_owner_mode_at_decision_time(market):  # noqa: F811
     settings, database, clock, _ = market
+    settings = settings.model_copy(update={"ai_require_approval": False, "ai_rule_fallback_enabled": True})
     modes = iter(["BLOCK_ON_AI_FAILURE", "TECHNICAL_ONLY"])
     brain = AIBrain(settings, clock, provider=Provider("broken"), fallback_mode=lambda: next(modes))
     snapshot = await snapshot_for(market)
     assert (await brain.decide(snapshot)).source == "ai_blocked"
     technical = await brain.decide(snapshot)
     assert technical.source == "rule_fallback" and technical.executable
+
+
+async def test_require_approval_blocks_even_in_technical_mode(market):  # noqa: F811
+    settings, database, clock, _ = market
+    assert settings.ai_require_approval is True and settings.ai_rule_fallback_enabled is False
+    brain = AIBrain(settings, clock, provider=Provider("broken"), fallback_mode=lambda: "TECHNICAL_ONLY")
+    result = await brain.decide(await snapshot_for(market))
+    assert result.source == "ai_blocked" and not result.executable and "no_ai_approval" in result.reasons
+    enabled_only = settings.model_copy(update={"ai_rule_fallback_enabled": True})
+    brain = AIBrain(enabled_only, clock, provider=Provider("broken"), fallback_mode=lambda: "TECHNICAL_ONLY")
+    assert (await brain.decide(await snapshot_for(market))).source == "ai_blocked"
 
 
 # -- owner toggle: Telegram + Mini App, audited, kill switch untouched ------------------------------

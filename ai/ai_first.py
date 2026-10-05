@@ -76,7 +76,9 @@ class AIFirstLayer:
         elif provider is not None:
             self.brain = AIBrain(settings, clock, provider=provider, deep_provider=provider, **common)
         else:
-            self.brain = AIBrain.from_settings(settings, clock, **common)
+            self.brain = AIBrain.from_settings(
+                settings, clock, provider_listener=self._provider_event, **common
+            )
         self.reviewer = AIFirstReviewer(
             self.brain,
             self.awareness,
@@ -130,6 +132,25 @@ class AIFirstLayer:
                     ),
                 )
 
+    def _provider_event(self, event: str, label: str, detail: str) -> None:
+        """Registry per-label telemetry: audit every failure (for /ai_stats), alert circuit changes."""
+        try:
+            if event == "failure":
+                self.database.audit("ai.provider_failure", "ai", {"label": label, "reason": detail})
+            else:
+                details = {"label": label, "event": event, "reason": detail}
+                self.database.audit("ai.provider_circuit", "ai", details)
+        except Exception:
+            pass  # Telemetry never changes a decision.
+        self.notifier.provider_event(event, label, detail)
+        if self.alerts is not None and event in {"circuit_open", "circuit_closed"}:
+            self.alerts.emit(
+                "ERROR" if event == "circuit_open" else "WARNING",
+                "AI Provider",
+                f"AI provider {label} circuit {'OPEN' if event == 'circuit_open' else 'CLOSED'} ({detail})",
+                details={"label": label},
+            )
+
     # -- facts ----------------------------------------------------------------------------------
     def trades_today(self) -> int:
         zone = ZoneInfo(self.settings.trading_day_timezone)
@@ -154,6 +175,31 @@ class AIFirstLayer:
             position_id=getattr(outcome, "position_identifier", None),
             final_action=f"execution_{status}",
         )
+        self.sync_attribution()
+
+    def sync_attribution(self) -> dict:
+        """Who-decided rows + one entry/close Telegram message per trade (idempotent)."""
+        from ai.trade_attribution import sync
+
+        return sync(self.database, self.clock, notifier=self.notifier, account_key=self.engine.account_key)
+
+    def trade_audit(self) -> dict:
+        """Daily audit: every trade needs a matching valid AI approval; any flag alerts the owner."""
+        from ai.trade_audit import audit_trades, format_report
+
+        self.sync_attribution()
+        report = audit_trades(self.database, self.settings, self.clock, run_sync=False)
+        if not report["clean"]:
+            self.notifier.summary(format_report(report, limit=5))
+            if self.alerts is not None:
+                self.alerts.emit(
+                    "ERROR",
+                    "Trade Audit",
+                    f"Trade audit: {len(report['flags'])} flag(s) in {report['checked']} trades",
+                    details=report["counts"],
+                    action="Run /audit for details",
+                )
+        return {"state": "clean" if report["clean"] else "flagged", **report["counts"]}
 
     async def learn_closed_trades(self, *, limit: int = 5) -> dict:
         synced = self.adjuster.sync_owner_decisions()  # Owner /approve reaches the overlay within 5 min.
