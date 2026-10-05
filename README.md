@@ -2,7 +2,7 @@
 
 Selective, owner-controlled MT5 trading automation. **No profit guarantee.**
 
-## Current release: Parts 1–14 (0.12.0 · schema 2)
+## Current release: Parts 1–15 (0.13.0 · schema 2)
 
 Implemented: settings/database/logging/operator CLI, serialized Windows MT5 and
 mock/paper adapters, cost-aware sizing, durable risk/owner/stage/ownership/trailing,
@@ -19,8 +19,11 @@ ML artifact/corpus, exact purged reconstruction, private research-only registry 
 and actual ML approval/execution revalidation**.
 Completed research runs additionally publish an exact input/output/private-ledger
 bundle closure for bounded read-only metric/decision/SQLite-memory audits.
-**2,528 tests pass in both working and complete independently extracted source**
-(201 additions since Part13). Lint/compile/exact lock/eleven offline smokes pass.
+**Part 15** adds working deployment preflight checks, **Groq (OpenAI-compatible) strict
+JSON-schema mode** and a **rule-based fallback when the AI provider is unavailable**, plus a
+reproducible `docs/RELEASE_15_MANIFEST.json` (see `docs/PART_15_NOTES.md`).
+**2,644 tests pass with no file skipped** (Part 14 recorded 2,528).
+Lint/compile and the offline smokes pass.
 Actual Linux scope and remaining native/provenance limits are in `docs/VALIDATION.md`.
 See `docs/VALIDATION.md` for executed checks and limitations.
 Production-oriented code is not profitability proof or audited/native-deployment readiness.
@@ -44,7 +47,7 @@ TEST_ONLY synthetic markets/transports, not genuine owner credentials or orders.
 No actual deployment, genuine Telegram/provider/broker request or real order was made.
 
 `docs/PART_10_NOTES.md` covers lifecycle/scheduler/watchdog/backup contracts;
-`DEPLOYMENT_WINDOWS.md` full operator steps; **`PART_14.md`** includes complete literal
+`DEPLOYMENT_WINDOWS.md` full operator steps; **`PART_15_NOTES.md`** covers Part 15; **`PART_14.md`** includes complete literal
 current code/configuration/tests plus HTML/CSS/JS/VBS/PowerShell. `BACKTESTING.md` and
 `OPERATOR_PLAYBOOK.md` give exact replay and stage-review workflows. `CURRENT_TREE.txt`
 is the actual packaged tree. Earlier guides/manifests are historical snapshots, not
@@ -314,9 +317,19 @@ bypass validation. See the Part 6 compatibility section in `docs/MIGRATIONS.md`.
 
 ## Part 7 AI/learning safety boundary
 
-Ollama and OpenAI-compatible adapters are async, fixed-origin and bounded. Fallback
-is for availability only, never to shop past valid reject/WAIT/low confidence or
-invalid bindings. Strict schema/hash/freshness checks reject untrusted replies.
+Ollama and OpenAI-compatible adapters (including **Groq**: `OPENAI_BASE_URL=https://api.groq.com/openai/v1`,
+`OPENAI_MODEL=qwen/qwen3.8-27b` or `openai/gpt-oss-20b|120b`, `OPENAI_RESPONSE_FORMAT=json_schema_strict`)
+are async, fixed-origin and bounded. Provider fallback is for availability only, never to shop
+past a valid reject/WAIT/low confidence. Strict schema/hash/freshness checks reject untrusted replies.
+
+**Rule-based fallback (Part 15, `AI_RULE_FALLBACK_ENABLED=true`):** when the AI times out, is
+rate-limited (429), down (5xx), unconfigured or returns invalid JSON, the persisted technical
+signal score decides instead of blocking every entry. It approves only at
+`AI_RULE_FALLBACK_MIN_SCORE` (default 80, validated ≥ AI/signal thresholds); its confidence is
+bound to that exact score and rechecked at finalization and pre-send. A valid AI veto, an
+unbound reply that signals a veto, `AI_PROVIDER=disabled`, unsafe news, an ML-filter veto and
+BACKTEST never use it; LIVE needs `AI_RULE_FALLBACK_ALLOW_LIVE=true`. Risk/stage/owner/SL gates
+are unchanged and the bot still starts PAUSED.
 Prompt injection cannot be guaranteed away; deterministic risk/news/owner controls
 remain independent. No model output is an order or a live permission.
 
@@ -394,7 +407,8 @@ Parts 1–10 are delivered; Part 11 historical backtester/stage-report usage is 
    commission, swap and currency conversion. Test the MT5 adapter read-only.
    Keep `PAPER_TRADING=true`; a real data backend still uses simulated execution.
 2. **Part 7–8**: run Ollama with the configured model or an explicitly configured
-   cloud provider. Provider failure rejects entries; no fabricated confidence.
+   cloud provider (Groq via the OpenAI-compatible adapter). Provider failure uses the
+   bounded rule-based fallback (technical score only, see Part 7 section); no fabricated AI confidence.
    Install reliable, entitled RSS/API sources and economic-calendar coverage.
    Check feed timestamps, UTC coverage horizon and high-impact windows.
 3. **Part 9**: host the Mini App with HTTPS through a reverse proxy or tunnel.

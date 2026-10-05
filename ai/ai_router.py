@@ -35,6 +35,33 @@ class RoutedReply:
     simulated: bool
 
 
+# Router outcomes that mean "no usable AI answer was obtained" (provider down/429/5xx, circuit open,
+# not configured, timeout, invalid JSON/envelope/binding, unexpected transport failure). Only these may
+# use the deterministic rule-based fallback. "disabled"/"expired" and every VALID reply never do.
+FALLBACK_ELIGIBLE_OUTCOMES = frozenset({"unavailable", "timeout", "invalid", "unexpected"})
+
+
+def _signals_veto(content: str, threshold: float) -> bool:
+    """Best-effort read of an INVALID reply: does it look like a veto? Never used to approve."""
+    import json
+
+    try:
+        if not isinstance(content, str) or len(content) > 16384:
+            return False
+        text = content.strip()
+        if text.startswith("```"):
+            text = text.strip("`").removeprefix("json").strip()
+        values = json.loads(text)
+    except (ValueError, TypeError, RecursionError):
+        return False
+    if not isinstance(values, dict):
+        return False
+    confidence = values.get("confidence")
+    return values.get("decision") in {"reject", "wait"} or (
+        isinstance(confidence, (int, float)) and not isinstance(confidence, bool) and confidence < threshold
+    )
+
+
 @dataclass(slots=True)
 class Circuit:
     failures: int = 0
@@ -76,12 +103,17 @@ class AIRouter:
         )
 
     async def complete(self, request: AIRequest) -> RoutedReply | None:
+        routed, _ = await self.complete_with_outcome(request)
+        return routed
+
+    async def complete_with_outcome(self, request: AIRequest) -> tuple[RoutedReply | None, str]:
+        """Same bounded routing as complete(), plus WHY no reply was produced (see FALLBACK_ELIGIBLE)."""
         if self._closed:
             raise AIUnavailable("router_closed")
         cfg = self.settings
         if cfg.ai_provider == "disabled":
             await self._audit("ai.disabled_veto", request)
-            return None  # A disabled primary never silently selects a fallback.
+            return None, "disabled"  # A disabled primary never silently selects a fallback.
         started = aware_utc(self.clock.now())
         order = tuple(dict.fromkeys((cfg.ai_provider, cfg.ai_fallback_provider)))
         try:
@@ -90,7 +122,7 @@ class AIRouter:
                     for name in order:
                         if self.clock.now() > request.expires_at:
                             await self._audit("ai.expired_veto", request)
-                            return None
+                            return None, "expired"
                         provider = self.providers.get(name)
                         if provider is None or not provider.configured:
                             await self._audit(
@@ -129,10 +161,20 @@ class AIRouter:
                         # Invalid envelopes/content/bindings do NOT use another provider to get approval.
                         if content.provider != name:
                             raise AIInvalidResponse("provider_identity_changed")
-                        reply = decode_reply(content.content, request.purpose, request.payload())
+                        try:
+                            reply = decode_reply(content.content, request.purpose, request.payload())
+                        except AIInvalidResponse:
+                            if _signals_veto(content.content, cfg.ai_confidence_threshold):
+                                # Unbound/malformed but recognisably a reject/WAIT/low confidence: honour
+                                # the veto intent; never let the rule fallback overrule it.
+                                await self._audit(
+                                    "ai.invalid_response_veto", request, reason="unbound_reply_signalled_veto"
+                                )
+                                return None, "invalid_veto"
+                            raise
                         if self.clock.now() > request.expires_at:
                             await self._audit("ai.expired_veto", request)
-                            return None
+                            return None, "expired"
                         circuit.failures, circuit.blocked_until = 0, 0
                         await self._audit(
                             "ai.reviewed",
@@ -143,21 +185,21 @@ class AIRouter:
                             confidence=reply.confidence,
                             decision=getattr(reply, "decision", getattr(reply, "action", "advisory")),
                         )
-                        return RoutedReply(reply, name, content.model, started, content.simulated)
+                        return RoutedReply(reply, name, content.model, started, content.simulated), "reviewed"
         except asyncio.CancelledError:
             raise
         except TimeoutError:
             await self._audit("ai.timeout_veto", request)
-            return None
+            return None, "timeout"
         except AIInvalidResponse:
             await self._audit("ai.invalid_response_veto", request, reason="invalid_or_unbound_contract")
-            return None
+            return None, "invalid"
         except Exception:
             # No raw HTTP/validation/credential/provider exception escapes into audit.
             await self._audit("ai.unexpected_error_veto", request, reason="unexpected_provider_failure")
-            return None
+            return None, "unexpected"
         await self._audit("ai.unavailable_veto", request)
-        return None
+        return None, "unavailable"
 
     async def close(self):
         self._closed = True

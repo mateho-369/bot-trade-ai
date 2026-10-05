@@ -279,6 +279,11 @@ class Settings(BaseSettings):
     openai_api_key: SecretStr = SecretStr("")
     openai_base_url: str = "https://api.openai.com/v1"
     openai_model: str = "gpt-4.1-mini"
+    # json_object = provider JSON-syntax mode; json_schema_strict = provider constrained decoding
+    # (Groq openai/gpt-oss-20b, openai/gpt-oss-120b, qwen/qwen3.8-27b). Local strict validation ALWAYS runs.
+    openai_response_format: Literal["json_object", "json_schema_strict"] = "json_object"
+    # Empty = parameter not sent. Groq reasoning models accept low/medium/high (Qwen also none/default).
+    openai_reasoning_effort: Literal["", "none", "default", "low", "medium", "high"] = ""
     ai_confidence_threshold: float = Field(default=70, ge=50, le=100)
     ai_timeout_seconds: int = Field(default=12, ge=1, le=60)
     ai_max_concurrent: int = Field(default=2, ge=1, le=4)
@@ -288,6 +293,11 @@ class Settings(BaseSettings):
     ai_circuit_failures: int = Field(default=3, ge=1, le=10)
     ai_circuit_cooldown_seconds: int = Field(default=60, ge=10, le=600)
     ai_suggestion_ttl_seconds: int = Field(default=3600, ge=60, le=86400)
+    # Rule-based fallback: ONLY when the AI provider is unavailable/times out/returns invalid JSON.
+    # A valid AI reject/WAIT/low confidence stays final. News/ML/risk/stage/owner gates still apply.
+    ai_rule_fallback_enabled: bool = True
+    ai_rule_fallback_min_score: float = Field(default=80, ge=50, le=100)
+    ai_rule_fallback_allow_live: bool = False
     auto_reduce_risk: bool = False
     auto_adapt_strategy_weights: bool = False
     max_strategy_weight_step: Decimal = Field(default=Decimal("0.02"), gt=0, le=Decimal("0.02"))
@@ -563,6 +573,12 @@ class Settings(BaseSettings):
     def safety_invariants(self) -> Self:
         if not self.start_paused or not self.require_stop_loss or not self.require_stage_gates:
             raise ValueError("startup pause, broker SL and stage gates cannot be disabled")
+        if self.ai_rule_fallback_enabled and self.ai_rule_fallback_min_score < max(
+            self.ai_confidence_threshold, self.min_signal_score
+        ):
+            raise ValueError(
+                "AI_RULE_FALLBACK_MIN_SCORE must be >= AI_CONFIDENCE_THRESHOLD and MIN_SIGNAL_SCORE"
+            )
         if self.live_trading:
             if self.demo_mode or self.paper_trading or self.backtest_mode or self.mt5_backend != "real":
                 raise ValueError(
@@ -897,6 +913,10 @@ class Settings(BaseSettings):
             "calendar_provider": self.calendar_provider,
             "telegram_configured": bool(self.telegram_bot_token.get_secret_value()),
             "ai_provider": self.ai_provider,
+            "ai_rule_fallback_enabled": self.ai_rule_fallback_enabled,
+            "ai_rule_fallback_min_score": self.ai_rule_fallback_min_score,
+            "ai_rule_fallback_allow_live": self.ai_rule_fallback_allow_live,
+            "openai_response_format": self.openai_response_format,
             "model_filter_enabled": self.model_filter_enabled,
             "model_algorithm": self.model_algorithm,
             "config_fingerprint": self.safety_fingerprint(),

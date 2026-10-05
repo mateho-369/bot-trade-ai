@@ -245,7 +245,7 @@ class AIEntryReview:
     news_hash: str
     decision: Literal["approve", "reject", "wait"]
     confidence: float
-    provider: Literal["ollama", "openai", "test", "replay"]
+    provider: Literal["ollama", "openai", "test", "replay", "rule_fallback"]
     risk_percent: Decimal | None = None
     request_hash: str | None = None
     provider_model: str | None = None
@@ -261,7 +261,7 @@ class AIEntryReview:
             raise BrokerError("invalid reviewed provider model identifier")
         if not isinstance(self.source, SourceKind) or self.decision not in {"approve", "reject", "wait"}:
             raise BrokerError("invalid AI decision/provenance")
-        if self.provider not in {"ollama", "openai", "test", "replay"}:
+        if self.provider not in {"ollama", "openai", "test", "replay", "rule_fallback"}:
             raise BrokerError("unknown review provider")
         for value in (self.proposal_hash, self.code_hash, self.model_sha256, self.news_hash):
             valid_key(value)

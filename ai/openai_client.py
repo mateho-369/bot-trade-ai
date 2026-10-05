@@ -27,16 +27,19 @@ class OpenAIClient:
         cfg = self.settings
         if not self.configured:
             raise AIUnavailable("missing_api_key")
+        payload = {
+            "model": cfg.openai_model,
+            "messages": messages,
+            "temperature": 0,
+            "max_tokens": cfg.ai_max_output_tokens,
+            "stream": False,
+            "response_format": self._response_format(schema),
+        }
+        if cfg.openai_reasoning_effort:
+            payload["reasoning_effort"] = cfg.openai_reasoning_effort
         response = await self.http.post(
             cfg.openai_base_url + "/chat/completions",
-            {
-                "model": cfg.openai_model,
-                "messages": messages,
-                "temperature": 0,
-                "max_tokens": cfg.ai_max_output_tokens,
-                "stream": False,
-                "response_format": {"type": "json_object"},
-            },
+            payload,
             headers={"Authorization": "Bearer " + cfg.openai_api_key.get_secret_value()},
         )
         try:
@@ -65,6 +68,26 @@ class OpenAIClient:
             return ProviderContent(self.name, model, text, self.http.simulated)
         except (ValueError, KeyError, TypeError, AttributeError, UnicodeError):
             raise AIInvalidResponse("invalid_openai_envelope") from None
+
+    def _response_format(self, schema: dict) -> dict:
+        """Provider JSON enforcement. Local strict decoding/bindings run regardless of this mode."""
+        if self.settings.openai_response_format != "json_schema_strict":
+            return {"type": "json_object"}
+        from ai.schemas import REPLY_CLASSES, strict_output_schema
+
+        purpose = next(
+            (name for name, cls in REPLY_CLASSES.items() if cls.model_json_schema() == schema), None
+        )
+        if purpose is None:
+            raise AIInvalidResponse("unknown_reply_schema")  # Never send an unreviewed schema.
+        return {
+            "type": "json_schema",
+            "json_schema": {
+                "name": f"reflex_ai_{purpose}_v1",
+                "strict": True,
+                "schema": strict_output_schema(purpose),
+            },
+        }
 
     async def close(self):
         await self.http.close()

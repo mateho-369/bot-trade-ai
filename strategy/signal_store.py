@@ -21,6 +21,7 @@ from strategy.base_strategy import (
     TechnicalDecision,
 )
 from strategy.news_filter import NewsFilter
+from strategy.rule_fallback import RULE_FALLBACK_PROVIDER, rule_fallback_problems
 from trading.risk_types import DecisionContext, NewsWindow, RuntimeProfile
 from trading.types import BrokerError, Clock, Side, SourceKind, TradingDisabled
 
@@ -177,6 +178,10 @@ class SignalStore:
                     self.settings.mode == OperatingMode.BACKTEST
                     and self.profile.data_source == SourceKind.HISTORICAL
                     and (not self.settings.model_filter_enabled or model_gate is not None)
+                )
+                or review.provider == RULE_FALLBACK_PROVIDER
+                and rule_fallback_problems(
+                    review, signal_score=row.score, settings=self.settings, profile=self.profile
                 )
             ):
                 raise ValueError
@@ -402,6 +407,12 @@ class SignalStore:
                     )
                 ):
                     reasons.append("unbound_or_stale_ai_review")
+                if review.provider == RULE_FALLBACK_PROVIDER:
+                    reasons.extend(
+                        rule_fallback_problems(
+                            review, signal_score=row.score, settings=cfg, profile=self.profile
+                        )
+                    )
                 if review.decision != "approve":
                     reasons.append("ai_veto_or_wait")
                 if review.confidence < cfg.ai_confidence_threshold:
@@ -461,7 +472,9 @@ class SignalStore:
                     payload,
                     review.confidence,
                     "approved",
-                    "technical_ai_news_approved",
+                    "technical_rule_fallback_news_approved"
+                    if review.provider == RULE_FALLBACK_PROVIDER
+                    else "technical_ai_news_approved",
                 )
             self.database.add_audit(
                 session,

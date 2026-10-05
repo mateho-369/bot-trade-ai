@@ -435,6 +435,20 @@ def inspect_telegram_format(values):
     return tuple(findings), observations
 
 
+def _listing_model_count(raw):
+    """Count listed models from a complete bounded body; an unparsable listing is NOT unreachability."""
+    from ai.json_validation import strict_json
+
+    try:
+        body = strict_json(raw, max_bytes=PROBE_LIMIT_BYTES)
+    except Exception:
+        return None
+    if not isinstance(body, dict):
+        return None
+    models = body.get("models") if isinstance(body.get("models"), list) else body.get("data")
+    return len(models) if isinstance(models, list) else None
+
+
 def probe_ai_provider(cfg, *, timeout=None, transport=None):
     """ONE bounded read-only provider GET. Never a broker/Telegram/news request or a completion."""
     import httpx
@@ -477,18 +491,15 @@ def probe_ai_provider(cfg, *, timeout=None, transport=None):
             ) as response:
                 observations["status_code"] = response.status_code
                 observations["http_date"] = response.headers.get("date")
-                raw = bytearray()
-                for chunk in response.aiter_bytes():
+                raw, truncated = bytearray(), False
+                for chunk in response.iter_bytes():
                     if len(raw) + len(chunk) > PROBE_LIMIT_BYTES:
+                        truncated = True
                         break  # Connectivity is already established; never buffer an unbounded body.
                     raw.extend(chunk)
         observations["elapsed_ms"] = int((time.monotonic() - started) * 1000)
-        if observations["status_code"] == 200:
-            from ai.json_validation import strict_json
-
-            body = strict_json(bytes(raw), max_bytes=PROBE_LIMIT_BYTES)
-            models = body.get("models") if isinstance(body.get("models"), list) else body.get("data")
-            observations["model_count"] = len(models) if isinstance(models, list) else None
+        if observations["status_code"] == 200 and not truncated:
+            observations["model_count"] = _listing_model_count(bytes(raw))
     except Exception:
         observations["elapsed_ms"] = int((time.monotonic() - started) * 1000)
         return (
@@ -526,6 +537,8 @@ def inspect_writability(cfg, root, *, probe=False):
         from sqlalchemy.engine import make_url
 
         url = make_url(cfg.database_url.get_secret_value())
+        if url.get_backend_name() != "sqlite":
+            raise ValueError("not a local SQLite URL")  # Never probe/contact a database server.
         targets["database"] = (
             cfg.resolve_path(url.database) if url.database and url.database != ":memory:" else None
         )
@@ -698,8 +711,10 @@ def inspect_clock(cfg, *, http_date=None, drift_warning_seconds=5.0):
                 "suspended/virtualized host. Trailing, order-age and news-freshness logic depend on time.",
             )
         )
-    if http_date:
+    if http_date is not None:
         try:
+            if not isinstance(http_date, str) or not http_date.strip():
+                raise ValueError("HTTP Date header must be a non-empty string")
             reference = parsedate_to_datetime(http_date)
             if reference.tzinfo is None:
                 raise ValueError
