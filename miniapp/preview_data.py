@@ -337,6 +337,156 @@ FIXTURE = {
         ]
     },
 }
+FIXTURE["ai_journal"] = {
+    "items": [
+        {
+            "id": 3,
+            "time": "2026-10-03T12:01:00+00:00",
+            "kind": "trailing",
+            "symbol": "EURUSD",
+            "position_id": 1001,
+            "threshold": 30,
+            "source": "ai",
+            "model": "fixture",
+            "action": "hold_to_60",
+            "confidence": 82,
+            "reason": "Fixture: lock 30% placed first; trend intact on M15/H1.",
+            "executed": True,
+            "final_action": "hold_to_60",
+            "rejection_reason": None,
+            "outcome_usd": None,
+        },
+        {
+            "id": 2,
+            "time": "2026-10-03T11:58:00+00:00",
+            "kind": "entry",
+            "symbol": "XAUUSD",
+            "position_id": None,
+            "threshold": None,
+            "source": "rule_fallback",
+            "model": "technical-score-v1",
+            "action": "wait",
+            "confidence": 64,
+            "reason": "Fixture: AI unavailable; technical score below the fallback minimum.",
+            "executed": False,
+            "final_action": "vetoed",
+            "rejection_reason": "confidence_below_threshold,ai_wait",
+            "outcome_usd": None,
+        },
+    ],
+    "adjustments": [
+        {
+            "id": 1,
+            "time": "2026-10-03T11:40:00+00:00",
+            "parameter": "risk_percent_per_trade",
+            "value": "0.4",
+            "classification": "minor",
+            "status": "applied",
+            "suggestion_id": None,
+        }
+    ],
+    "summary": {
+        "decisions": 2,
+        "ai_answers": 1,
+        "rule_fallbacks": 1,
+        "entries_approved": 0,
+        "with_outcome": 0,
+    },
+}
+FIXTURE["settings"]["ai_fallback"] = {
+    "mode": "BLOCK_ON_AI_FAILURE",
+    "source": "settings",
+    "configured_default": "BLOCK_ON_AI_FAILURE",
+    "technical_min_score": 80,
+    "description": "AI outage blocks NEW entries; trailing/protection continue",
+    "ai": {"available": False, "mode": "unknown", "stale": True},
+    "limits": {
+        "max_daily_trades": 12,
+        "max_open_positions": 3,
+        "risk_percent": "0.5",
+        "target_usd": "5",
+        "source": "defaults",
+        "reason": "fixture",
+    },
+    "kill_switch_unaffected": True,
+}
+FIXTURE["alerts"] = {
+    "items": [
+        {
+            "id": 3,
+            "timestamp": "2026-10-03T12:05:00+00:00",
+            "level": "CRITICAL",
+            "component": "Risk Engine",
+            "message": "Fixture: daily loss limit reached - trading auto-paused",
+            "details": {},
+            "action": "No new entries; owner review required",
+            "repeat_count": 1,
+            "last_seen": "2026-10-03T12:05:00+00:00",
+            "telegram_status": "sent",
+            "acknowledged": False,
+            "acknowledged_at": None,
+            "resolved": False,
+            "resolved_at": None,
+        },
+        {
+            "id": 2,
+            "timestamp": "2026-10-03T12:01:00+00:00",
+            "level": "ERROR",
+            "component": "MT5 Client",
+            "message": "Fixture: connection lost - broker unavailable",
+            "details": {},
+            "action": "New entries halted (broker_unstable); protective jobs keep retrying",
+            "repeat_count": 5,
+            "last_seen": "2026-10-03T12:04:00+00:00",
+            "telegram_status": "sent",
+            "acknowledged": False,
+            "acknowledged_at": None,
+            "resolved": False,
+            "resolved_at": None,
+        },
+        {
+            "id": 1,
+            "timestamp": "2026-10-03T11:55:00+00:00",
+            "level": "INFO",
+            "component": "AI Provider",
+            "message": "Fixture: AI fallback mode set to BLOCK_ON_AI_FAILURE",
+            "details": {},
+            "action": None,
+            "repeat_count": 1,
+            "last_seen": "2026-10-03T11:55:00+00:00",
+            "telegram_status": "not_required",
+            "acknowledged": True,
+            "acknowledged_at": "2026-10-03T11:56:00+00:00",
+            "resolved": False,
+            "resolved_at": None,
+        },
+    ],
+    "counts": {"CRITICAL": 1, "ERROR": 1},
+    "unacknowledged": 2,
+    "table_present": True,
+}
+FIXTURE["ai_stats"] = {
+    "labels": [
+        {
+            "label": "groq",
+            "approvals": 4,
+            "rejections": 9,
+            "trades": 3,
+            "closed": 2,
+            "win_rate": 50.0,
+            "net_profit": "1.20",
+            "avg_confidence": 81.5,
+            "failures": 1,
+        }
+    ],
+    "configured": [
+        {"label": "groq", "model": "fixture-model", "role": "decision", "priority": 0, "enabled": True}
+    ],
+    "decision_mode": "first_available",
+    "require_approval": True,
+    "recent_trades": [],
+}
+FIXTURE["audit"] = {"checked": 3, "flags": [], "counts": {}, "clean": True}
 FIXTURE["dashboard"]["positions"] = FIXTURE["positions"]["items"]
 
 

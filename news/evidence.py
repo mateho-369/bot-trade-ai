@@ -8,11 +8,23 @@ from dataclasses import asdict, dataclass, replace
 from datetime import timedelta
 
 from core.security import sha256_json
-from core.settings import Settings
+from core.settings import OperatingMode, Settings
 from news.news_cache import FORMAT, latest_publication, load_snapshot, scope_hash
 from news.types import CalendarSnapshot, EconomicEvent, NewsInvalid, parse_time, source_id
 from trading.risk_types import NewsWindow, RuntimeProfile
 from trading.types import BrokerError, SourceKind, valid_key
+
+MIN_LOT_DEMO_REASON = "news_unavailable_min_lot_demo"
+# Reasons that mean "the news/calendar SOURCE could not be read" (NEWS_UNAVAILABLE_POLICY scope).
+SOURCE_UNAVAILABLE_REASONS = frozenset(
+    {
+        "required_headline_source_unavailable",
+        "stale_or_quiet_headline_source",
+        "incomplete_source_snapshot",
+        "calendar_unavailable",
+        "calendar_file_changed_or_unavailable",
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -229,6 +241,8 @@ def project_window(
         and not cfg.calendar_file_reviewed
         or calendar.source_id == "calendar:finnhub"
         and not cfg.finnhub_calendar_scope_reviewed
+        or calendar.source_id == "calendar:faireconomy"
+        and not cfg.calendar_faireconomy_reviewed
         or not calendar.events
         and not cfg.calendar_allow_empty_reviewed
     ):
@@ -316,6 +330,19 @@ def project_window(
     if expires <= now:
         known = False
         reasons.append("news_proof_expired")
+    if (
+        not known
+        and not blocks
+        and cfg.news_unavailable_policy == "min_lot_demo"
+        and cfg.mode == OperatingMode.DEMO
+        and not cfg.live_trading
+        and reasons
+        and set(reasons) <= SOURCE_UNAVAILABLE_REASONS
+    ):
+        # Owner opt-in, DEMO only: sources are truly UNAVAILABLE (never stale-unreviewed, fixture,
+        # expired or a reported block). Execution then uses the broker minimum lot only.
+        known = True
+        reasons.append(MIN_LOT_DEMO_REASON)
     window = NewsWindow(
         known,
         known and not blocks,

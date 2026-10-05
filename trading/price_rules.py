@@ -99,11 +99,11 @@ def validate_entry(
     )
     if not allowed:
         raise InvalidOrder("symbol trading mode forbids this entry")
-    limit = settings.symbol_spread_limits.get(order.symbol, settings.max_spread_points)
-    # Overrides may be keyed by logical name or native broker name.
-    for logical in settings.symbols:
-        if settings.symbol_aliases.get(logical, logical) == order.symbol:
-            limit = settings.symbol_spread_limits.get(logical, limit)
+    # Overrides may be keyed by logical name (preferred) or native broker name.
+    logical = next(
+        (name for name in settings.symbols if settings.symbol_aliases.get(name, name) == order.symbol), None
+    )
+    limit = settings.spread_limit_points(logical, order.symbol)
     if tick.spread_points(symbol) > limit:
         raise RiskViolation("spread exceeds the owner limit")
     if abs(tick.entry(order.side) - order.reference_price) > settings.max_slippage_points * symbol.point:

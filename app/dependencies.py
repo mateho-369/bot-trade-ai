@@ -40,6 +40,8 @@ class RuntimeResources:
     positions: PositionManager
     notices: RuntimeNotices
     telegram: object = None
+    ai_first: object = None  # ai.ai_first.AIFirstLayer when AI_FIRST_ENABLED=true
+    alerts: object = None  # app.alerts.AlertCenter (owner alert center)
 
 
 def compose(settings, database, *, broker=None):
@@ -72,6 +74,19 @@ def compose(settings, database, *, broker=None):
         suggestions=supervisor.suggestions,
         news=news,
     )
+    ai_first = None
+    if settings.ai_first_enabled:
+        from ai.ai_first import AIFirstLayer
+
+        ai_first = AIFirstLayer(database, settings, broker, engine, supervisor)
+    adaptive = ai_first.trailing if ai_first is not None and settings.ai_adaptive_trailing_enabled else None
+    from app.alerts import AlertCenter
+
+    alerts = AlertCenter(
+        database, settings, broker.clock, control=engine.control, account_key=lambda: engine.account_key
+    )
+    if ai_first is not None:
+        ai_first.alerts = alerts
     return RuntimeResources(
         settings,
         database,
@@ -81,8 +96,10 @@ def compose(settings, database, *, broker=None):
         supervisor,
         news,
         owner,
-        PositionManager(engine),
+        PositionManager(engine, adaptive=adaptive),
         RuntimeNotices(database, settings, broker.clock),
+        ai_first=ai_first,
+        alerts=alerts,
     )
 
 

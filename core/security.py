@@ -33,6 +33,12 @@ def secret_values(settings: object) -> tuple[str, ...]:
             raw = value.get_secret_value()
             if raw:
                 values.append(raw)
+        elif isinstance(value, dict):  # e.g. AI_PROVIDERS keys resolved by env-var name.
+            values.extend(
+                v.get_secret_value()
+                for v in value.values()
+                if isinstance(v, SecretStr) and v.get_secret_value()
+            )
     # Longer values first prevents partial redaction from exposing a suffix.
     return tuple(sorted(set(values), key=len, reverse=True))
 

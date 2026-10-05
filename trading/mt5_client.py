@@ -25,6 +25,7 @@ import pandas as pd
 
 from core.security import sanitize_text, secret_values
 from core.settings import TIMEFRAME_MINUTES, OperatingMode, Settings
+from trading.ai_controls import broker_ceilings
 from trading.authorization import (
     BrokerSnapshot,
     DenyAllWrites,
@@ -35,7 +36,7 @@ from trading.authorization import (
 )
 from trading.candles import validated_candles
 from trading.client_helpers import ClientCalculations
-from trading.currency import ConversionQuote
+from trading.currency import ConversionQuote, denomination
 from trading.price_rules import adverse_price, protection_prices, validate_entry, validate_volume
 from trading.types import (
     ZERO,
@@ -136,6 +137,7 @@ class MT5Client(ClientCalculations):
         self._lease_token = object()
         self._leased = False
         self._pin: str | None = None
+        self.observed_account_currency: str | None = None
         self._connected = False
         self._closing = False
         self._closed = False
@@ -282,6 +284,9 @@ class MT5Client(ClientCalculations):
             bool(getattr(raw, "trade_allowed", False)),
             bool(getattr(raw, "trade_expert", False)),
         )
+        # Currency code only (not identity): lets read-only symbol discovery tell
+        # the owner which ACCOUNT_CURRENCY to declare, e.g. USC on a cent account.
+        self.observed_account_currency = account.currency
         if account.currency != self.settings.account_currency:
             self._quarantine("terminal currency mismatch")
             raise IdentityChanged("declared account currency differs from terminal currency")
@@ -437,6 +442,20 @@ class MT5Client(ClientCalculations):
             if len(rows) > 50000:
                 raise BrokerError("symbol response exceeds the safety bound")
             return tuple(str(row.name) for row in rows)
+
+        return await self._call(read)
+
+    async def get_market_watch_symbols(self) -> tuple[str, ...]:
+        """Names currently shown in the terminal's Market Watch (read-only)."""
+
+        def read():
+            self._ensure_sync()
+            rows = self._api.symbols_get()
+            if rows is None:
+                raise self._error("symbols_get")
+            if len(rows) > 50000:
+                raise BrokerError("symbol response exceeds the safety bound")
+            return tuple(str(row.name) for row in rows if bool(getattr(row, "visible", False)))
 
         return await self._call(read)
 
@@ -678,34 +697,34 @@ class MT5Client(ClientCalculations):
 
         return await self._call(read)
 
-    def _cost_sync(self, volume: Decimal, account: AccountInfo) -> Decimal:
-        dollars = self.settings.commission_round_turn_usd_per_lot * volume
-        if account.currency == "USD":
-            return dollars
-        symbol = self.settings.account_to_usd_symbols.get(account.currency)
-        if not symbol:
+    def _parent_quote_sync(self, parent: str) -> ConversionQuote:
+        route = self.settings.account_to_usd_symbols.get(parent)
+        if not route:
             raise RiskViolation("account currency lacks an explicit USD conversion route")
-        meta = self._meta_sync(symbol)
+        meta = self._meta_sync(route)
         tick = self._tick_sync(meta)
         tick.fresh(self.clock, self.settings.max_tick_age_seconds)
-        return -ConversionQuote(meta, tick).convert(-dollars, "USD", account.currency)
+        return ConversionQuote(meta, tick)
+
+    def _cost_sync(self, volume: Decimal, account: AccountInfo) -> Decimal:
+        dollars = self.settings.commission_round_turn_usd_per_lot * volume
+        # Cent accounts (USC/EUC): exact x100 of the parent amount, no quote.
+        parent, factor = denomination(account.currency)
+        if parent == "USD":
+            return dollars * factor
+        return -self._parent_quote_sync(parent).convert(-dollars, "USD", parent) * factor
 
     def _snapshot_sync(self, account, meta, tick, positions, risk, margin, reward, *, entry):
         asset, liability = None, None
         valuations = []
         if entry:
-            if account.currency == "USD":
-                asset = liability = Decimal("1")
+            parent, factor = denomination(account.currency)
+            if parent == "USD":
+                asset = liability = Decimal("1") / factor  # USC: exactly 0.01 USD
             else:
-                route = self.settings.account_to_usd_symbols.get(account.currency)
-                if not route:
-                    raise RiskViolation("missing account/USD risk conversion route")
-                fxmeta = self._meta_sync(route)
-                fxtick = self._tick_sync(fxmeta)
-                fxtick.fresh(self.clock, self.settings.max_tick_age_seconds)
-                fx = ConversionQuote(fxmeta, fxtick)
-                asset = fx.convert(Decimal("1"), account.currency, "USD")
-                liability = -fx.convert(Decimal("-1"), account.currency, "USD")
+                fx = self._parent_quote_sync(parent)
+                asset = fx.convert(Decimal("1"), parent, "USD") / factor
+                liability = -fx.convert(Decimal("-1"), parent, "USD") / factor
             for position in positions:
                 pmeta = self._meta_sync(position.symbol)
                 ptick = self._tick_sync(pmeta)
@@ -823,7 +842,7 @@ class MT5Client(ClientCalculations):
             - cost
         )
         margin = self._margin_sync(order.symbol, order.side, order.volume, worst_entry)
-        budget = account.risk_capital * self.settings.effective_risk_percent / Decimal("100")
+        budget = account.risk_capital * broker_ceilings(self.settings).risk_percent / Decimal("100")
         available = min(
             account.margin_free,
             account.risk_capital * self.settings.max_margin_usage_percent / Decimal("100") - account.margin,
@@ -871,7 +890,7 @@ class MT5Client(ClientCalculations):
             meta = self._meta_sync(order.symbol)
             tick = self._tick_sync(meta)
             validate_entry(order, meta, tick, self.settings, self.clock)
-            if len(positions) >= self.settings.max_open_positions or any(
+            if len(positions) >= broker_ceilings(self.settings).max_open_positions or any(
                 position.symbol == order.symbol for position in positions
             ):
                 raise RiskViolation("position count/same-symbol averaging is forbidden")

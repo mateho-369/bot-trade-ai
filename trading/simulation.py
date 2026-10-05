@@ -16,6 +16,7 @@ from zoneinfo import ZoneInfo
 
 from core.security import canonical_json
 from core.settings import OperatingMode, Settings
+from trading.ai_controls import broker_ceilings
 from trading.authorization import validate_write_grant
 from trading.client_helpers import ClientCalculations
 from trading.currency import CurrencyConverter
@@ -381,10 +382,10 @@ class SimulatedBroker(ClientCalculations):
                 self._quotes_stale
                 or self._daily_latched
                 or self._drawdown_latched
-                or self._entries_today >= self.settings.max_daily_trades
+                or self._entries_today >= broker_ceilings(self.settings).max_daily_trades
             ):
                 raise RiskViolation("simulation daily/drawdown/count/stale-exposure gate blocks entry")
-            if len(self._positions) >= self.settings.max_open_positions or any(
+            if len(self._positions) >= broker_ceilings(self.settings).max_open_positions or any(
                 position.symbol == order.symbol for position in self._positions.values()
             ):
                 raise RiskViolation("simulation position cap/no-averaging rule")
@@ -418,7 +419,7 @@ class SimulatedBroker(ClientCalculations):
                 )
             ) - fees
             margin = await self.market.calculate_margin(order.symbol, order.side, order.volume, worst_entry)
-            budget = account.risk_capital * self.settings.effective_risk_percent / Decimal("100")
+            budget = account.risk_capital * broker_ceilings(self.settings).risk_percent / Decimal("100")
             available = min(
                 account.margin_free,
                 account.risk_capital * self.settings.max_margin_usage_percent / Decimal("100")

@@ -9,6 +9,7 @@ from uuid import uuid4
 
 from core.security import sha256_json
 from core.settings import Settings
+from trading.ai_controls import broker_ceilings
 from trading.currency import CurrencyConverter
 from trading.price_rules import adverse_price, floor_volume, snap, validate_entry, validate_volume
 from trading.types import ZERO, Clock, InvalidOrder, MarketData, MarketOrder, RiskViolation, Side
@@ -93,7 +94,7 @@ class OrderCalculator:
         if (
             not isinstance(percent, Decimal)
             or not percent.is_finite()
-            or not ZERO < percent <= self.settings.effective_risk_percent
+            or not ZERO < percent <= broker_ceilings(self.settings).risk_percent
         ):
             raise RiskViolation("requested risk exceeds the configured effective cap")
         if side.sign * (entry - sl) <= ZERO:
@@ -117,6 +118,8 @@ class OrderCalculator:
         if loss <= ZERO or margin < ZERO or not margin.is_finite():
             raise RiskViolation("invalid native loss/margin valuation")
         limit = min(meta.volume_max, probe * budget / loss)
+        if self.settings.demo_min_lot_only:
+            limit = min(limit, probe)  # Demo fast track / news-unavailable demo: broker minimum lot only.
         if margin > ZERO:
             limit = min(limit, probe * available_margin / margin)
         if meta.volume_limit > ZERO:

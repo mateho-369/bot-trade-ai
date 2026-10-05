@@ -11,8 +11,12 @@ from trading.types import BrokerError, TradingDisabled
 
 
 class PositionManager:
-    def __init__(self, engine: ExecutionEngine):
-        self.engine = engine
+    def __init__(self, engine: ExecutionEngine, *, adaptive=None):
+        """``adaptive``: optional trading.ai_adaptive_trailing.AdaptiveTrailing (lock-first AI layer).
+
+        Without it the mechanical 30/60/90 + ATR trailing runs exactly as before.
+        """
+        self.engine, self.adaptive = engine, adaptive
         self._lock = asyncio.Lock()
 
     async def cycle(self, reviews: Mapping[int, PositionReview] | None = None) -> dict:
@@ -46,7 +50,12 @@ class PositionManager:
                             )
                         except BrokerError:
                             pass  # Locks still work; don't invent ATR when history is unavailable.
-                    plan = await self.engine.trailing.plan(position, owned, candles=candles)
+                    if self.adaptive is not None:
+                        # Lock-first: the mechanical lock is sent BEFORE any AI consultation.
+                        outcomes.extend(await self.adaptive.manage(position, owned, candles=candles))
+                        plan = None
+                    else:
+                        plan = await self.engine.trailing.plan(position, owned, candles=candles)
                     if plan:
                         result = await self.engine.protect_sl(
                             position.ticket, position.identifier, plan.sl, lock_level=plan.lock_level

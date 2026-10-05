@@ -80,7 +80,13 @@ async def test_model_veto_unsafe_binding_or_unapproved_risk_never_trades(runtime
     signals, execution, supervisor, primary, secondary = runtime
     primary.reply_changes = changes
     result = await signals.evaluate("EURUSD", reviewer=supervisor, news=news(signals.clock))
-    assert not result.approved and not await execution.broker.get_positions() and not secondary.requests
+    assert not await execution.broker.get_positions() and not secondary.requests
+    if set(changes) <= {"proposal_hash", "source", "code_hash"}:
+        # An UNBOUND approval is an invalid provider response: the AI's answer is discarded and only
+        # the deterministic rule-based fallback (tests/test_rule_fallback.py) may decide.
+        assert not result.approved or result.payload()["ai_review"]["provider"] == "rule_fallback"
+    else:
+        assert not result.approved
     if changes == {"risk_percent": "0.2"}:
         with execution.database.session() as s:
             suggestion = s.scalar(select(AISuggestion))
@@ -265,3 +271,28 @@ async def test_learning_cycle_actual_toy_fit_registers_inactive_candidate_only(r
         row = session.scalar(select(ModelVersion))
         assert row.deployment_scope == "candidate" and not row.active
     assert execution.database.status()["state"] == "paused" and not await execution.broker.get_positions()
+
+
+@pytest.mark.parametrize("binding", [{"proposal_hash": "e" * 64}, {"source": "mt5"}, {"code_hash": "e" * 64}])
+async def test_unbound_ai_approval_never_trades_when_rule_fallback_is_disabled(tmp_path, binding):
+    signals, execution, supervisor, primary, secondary = await make_ai_runtime(
+        tmp_path, openai_api_key="FIXTURE_OPENAI_KEY", ai_rule_fallback_enabled=False
+    )
+    try:
+        primary.reply_changes = binding
+        result = await signals.evaluate("EURUSD", reviewer=supervisor, news=news(signals.clock))
+        assert not result.approved and not secondary.requests
+    finally:
+        await supervisor.close()
+        await execution.shutdown()
+        execution.database.close()
+
+
+@pytest.mark.parametrize("veto", [{"decision": "reject"}, {"decision": "wait"}, {"confidence": 10}])
+async def test_unbound_ai_veto_is_honoured_and_never_overruled_by_rule_fallback(runtime, veto):
+    signals, execution, supervisor, primary, secondary = runtime
+    primary.reply_changes = {"proposal_hash": "e" * 64, **veto}
+    result = await signals.evaluate("EURUSD", reviewer=supervisor, news=news(signals.clock))
+    assert not result.approved and not secondary.requests
+    with execution.database.session() as s:
+        assert "rule_fallback" not in s.get(Signal, result.signal_id).reason

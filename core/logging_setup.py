@@ -42,6 +42,16 @@ class RedactingFormatter(logging.Formatter):
         return canonical_json(payload)
 
 
+ERROR_LOG_NAME = "errors.log"
+AI_LOG_NAME = "ai_decisions.log"
+AI_LOGGER_PREFIXES = ("ai.", "trading.ai_adaptive_trailing", "trading.ai_controls", "strategy.rule_fallback")
+
+
+class _AIDecisionFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        return record.name.startswith(AI_LOGGER_PREFIXES)
+
+
 def configure_logging(settings: Settings) -> None:
     settings.ensure_runtime_dirs()
     formatter = RedactingFormatter(secret_values(settings))
@@ -52,6 +62,25 @@ def configure_logging(settings: Settings) -> None:
         encoding="utf-8",
         delay=False,
     )
+    log_dir = settings.resolve_path(settings.log_file).parent
+    # errors.log: WARNING+ from every component. ai_decisions.log: AI entry/trailing/config decisions.
+    # Same rotation as bot.log: maxBytes each, current file + backupCount backups (5 MB x 6 by default).
+    error_handler = RotatingFileHandler(
+        log_dir / ERROR_LOG_NAME,
+        maxBytes=settings.log_max_bytes,
+        backupCount=settings.log_backup_count,
+        encoding="utf-8",
+        delay=True,
+    )
+    error_handler.setLevel(logging.WARNING)
+    ai_handler = RotatingFileHandler(
+        log_dir / AI_LOG_NAME,
+        maxBytes=settings.log_max_bytes,
+        backupCount=settings.log_backup_count,
+        encoding="utf-8",
+        delay=True,
+    )
+    ai_handler.addFilter(_AIDecisionFilter())
     console_handler = logging.StreamHandler(sys.stderr)
     # Prevent logging internals from dumping raw args on formatter/I/O errors.
     logging.raiseExceptions = False
@@ -60,11 +89,14 @@ def configure_logging(settings: Settings) -> None:
         root.removeHandler(previous)
         previous.close()
     root.setLevel(settings.log_level)
-    for handler in (file_handler, console_handler):
+    for handler in (file_handler, error_handler, ai_handler, console_handler):
         handler.setFormatter(formatter)
         root.addHandler(handler)
     # HTTP DEBUG logging can contain complete request data; never enable it.
-    for name in ("httpx", "httpcore", "sqlalchemy.engine", "aiogram.event"):
+    # APScheduler logs two INFO lines per job run (every 5-30 s): on a multi-day
+    # run that noise would rotate real events out of the bounded log. Job errors
+    # and missed runs are still WARNING/ERROR.
+    for name in ("httpx", "httpcore", "sqlalchemy.engine", "aiogram.event", "apscheduler"):
         logging.getLogger(name).setLevel(logging.WARNING)
 
 

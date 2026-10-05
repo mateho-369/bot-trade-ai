@@ -17,6 +17,7 @@ from core.database import Database
 from core.models import BrokerDeal, OrderIntent, RiskState, Trade
 from core.security import sha256_json
 from core.settings import OperatingMode, Settings
+from trading.ai_controls import effective_limits
 from trading.execution_authority import DurableWriteAuthority
 from trading.order_calculator import OrderCalculator, OrderPlan
 from trading.risk_types import DecisionContext, PositionReview, RuntimeProfile
@@ -298,12 +299,19 @@ class ExecutionEngine:
     ) -> ExecutionResult | None:
         async with self._lock:
             await self._reconcile()
+            # Same layer-1 rule as execute_signal: AI-dynamic risk/target only while the AI is up.
+            limits = await asyncio.to_thread(effective_limits, self.database, self.settings, self.clock)
+            risk_percent, target_usd = context.risk_percent, None
+            if limits.source == "ai":
+                risk_percent = min(risk_percent or limits.risk_percent, limits.risk_percent)
+                target_usd = limits.target_usd
             plan = await self.calculator.plan_market_order(
                 symbol,
                 side,
                 sl,
                 strategy=strategy,
-                risk_percent=context.risk_percent,
+                risk_percent=risk_percent,
+                target_usd=target_usd,
                 idempotency_key=idempotency_key,
             )
             if plan is None:
@@ -403,13 +411,21 @@ class ExecutionEngine:
                 or abs(tick.entry(signal.side) - close) > atr * self.settings.strategy_max_entry_drift_atr
             ):
                 raise TradingDisabled("price moved beyond the approved closed-bar ATR drift; do not chase")
+            # Layer-1 AI-dynamic risk/target (owner defaults when the AI is unavailable). A per-trade
+            # AI reduction in the reviewed context can only lower it; the risk engine re-checks.
+            limits = await asyncio.to_thread(effective_limits, self.database, self.settings, self.clock)
+            risk_percent, target_usd = context.risk_percent, None
+            if limits.source == "ai":
+                risk_percent = min(risk_percent or limits.risk_percent, limits.risk_percent)
+                target_usd = limits.target_usd
             plan = await self.calculator.plan_market_order(
                 signal.symbol,
                 signal.side,
                 signal.stop_price,
                 strategy=payload["strategy"],
                 idempotency_key=key,
-                risk_percent=context.risk_percent,
+                risk_percent=risk_percent,
+                target_usd=target_usd,
                 created_at=context.observed_at,
             )
             if plan is None:

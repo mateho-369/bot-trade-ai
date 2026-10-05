@@ -64,6 +64,13 @@ class SuggestionStore:
                     or sum(v > 0 for v in values.values()) < self.settings.strategy_min_agreeing
                 ):
                     raise ValueError
+            elif kind == "ai_config_adjustment":
+                from ai.config_adjuster import validate_value
+
+                if set(payload) != {"parameter", "value"} or not isinstance(payload["parameter"], str):
+                    raise ValueError
+                if validate_value(self.settings, payload["parameter"], payload["value"]) != payload["value"]:
+                    raise ValueError  # Only canonical, already-bounded values are stored.
             elif kind == "close_position":
                 if set(payload) != {"trade_id", "position_identifier", "position_hash", "fraction"}:
                     raise ValueError
@@ -203,7 +210,7 @@ class SuggestionStore:
                 "request_hash": request_hash,
                 "data_evidence_hash": data_evidence_hash,
                 "reason": reason,
-                "risk_level": "medium" if kind == "rebalance_weights" else "low",
+                "risk_level": "medium" if kind in {"rebalance_weights", "ai_config_adjustment"} else "low",
                 "unique_key": unique,
             }
             row = AISuggestion(
@@ -272,6 +279,8 @@ class SuggestionStore:
                 raise TradingDisabled("current unexpired owner-approved proposal required")
             if row.type == "close_position":
                 raise TradingDisabled("position proposals need authenticated fresh ownership/close handler")
+            if row.type == "ai_config_adjustment":
+                raise TradingDisabled("AI config adjustments apply only to the bounded AI overlay")
             values = self.settings.model_dump(mode="python")
             values["project_root"] = self.settings.project_root
             if row.type == "reduce_risk":

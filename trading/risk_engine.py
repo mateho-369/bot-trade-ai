@@ -21,6 +21,7 @@ from core.models import (
     Trade,
 )
 from core.settings import TIMEFRAME_MINUTES, OperatingMode, Settings
+from trading.ai_controls import effective_limits
 from trading.authorization import BrokerSnapshot
 from trading.risk_types import DecisionContext, RiskDecision, RuntimeProfile
 from trading.types import ZERO, AccountInfo, Clock, Position, SourceKind, TradingDisabled, aware_utc
@@ -416,10 +417,12 @@ class RiskEngine:
                 if item.request.get("context")
             ):
                 reasons.append("signal_already_reserved_or_executed")
-        percentage = context.risk_percent if context.risk_percent is not None else cfg.effective_risk_percent
-        if percentage > cfg.effective_risk_percent:
+        # Layer-1 AI-dynamic limits (owner defaults unless the AI is available) inside layer-2 caps.
+        limits = effective_limits(self.database, cfg, self.clock, session=session)
+        percentage = context.risk_percent if context.risk_percent is not None else limits.risk_percent
+        if percentage > max(cfg.effective_risk_percent, limits.risk_percent):
             reasons.append("risk_escalation")
-        budget = account.risk_capital * min(percentage, cfg.effective_risk_percent) / Decimal("100")
+        budget = account.risk_capital * min(percentage, limits.risk_percent) / Decimal("100")
         risk, margin = snapshot.worst_loss_account, snapshot.required_margin_account
         if risk <= ZERO or risk > budget:
             reasons.append("entry_risk_cap")
@@ -429,9 +432,9 @@ class RiskEngine:
             reasons.append("margin_cap")
         if risk > ZERO and snapshot.expected_reward_account / risk < cfg.min_net_reward_risk:
             reasons.append("net_reward_risk")
-        if row.accepted_entries_today - int(self_counted) >= cfg.max_daily_trades:
+        if row.accepted_entries_today - int(self_counted) >= limits.max_daily_trades:
             reasons.append("daily_entry_count")
-        if len(snapshot.positions) >= cfg.max_open_positions:
+        if len(snapshot.positions) >= limits.max_open_positions:
             reasons.append("position_cap")
         if any(position.symbol == order.symbol for position in snapshot.positions):
             reasons.append("no_averaging")

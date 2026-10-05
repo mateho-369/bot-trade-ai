@@ -46,11 +46,22 @@ async def test_below_minimum_lot_returns_skip_not_enlarged_risk():
 
 
 async def test_requested_risk_cannot_raise_configured_cap():
-    cfg = Settings(_env_file=None)
+    # Without AI-dynamic limits the broker ceiling IS the owner's configured risk (0.5 %).
+    cfg = Settings(_env_file=None, ai_dynamic_limits_enabled=False)
     async with MockMT5Client(cfg, clock=ManualClock(NOW)) as broker:
         with pytest.raises(RiskViolation):
             await OrderCalculator(broker, cfg).calculate_lot_size(
                 "XAUUSD", Side.BUY, D("2610.2"), D("2608"), risk_percent=D("1")
+            )
+
+
+async def test_requested_risk_cannot_exceed_the_hard_cap_with_dynamic_limits():
+    # With AI-dynamic limits the broker ceiling is the 1.0 % hard cap, never more.
+    cfg = Settings(_env_file=None, ai_dynamic_limits_enabled=True)
+    async with MockMT5Client(cfg, clock=ManualClock(NOW)) as broker:
+        with pytest.raises(RiskViolation):
+            await OrderCalculator(broker, cfg).calculate_lot_size(
+                "XAUUSD", Side.BUY, D("2610.2"), D("2608"), risk_percent=D("1.01")
             )
 
 

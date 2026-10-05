@@ -328,8 +328,12 @@ async def test_profile_cannot_relabel_actual_source(runtime):
         SignalEngine(execution.broker, execution.database, signals.settings, profile=fake)
 
 
-async def test_provider_timeout_is_a_final_veto_not_a_placeholder_approval(tmp_path):
-    signals, execution = await make_signal_runtime(tmp_path, ai_timeout_seconds=1)
+async def test_provider_timeout_is_a_final_veto_when_rule_fallback_is_disabled(tmp_path):
+    # With the rule-based fallback switched off, a timeout is a veto, never a placeholder approval.
+    # The enabled-fallback behaviour is covered in tests/test_rule_fallback.py.
+    signals, execution = await make_signal_runtime(
+        tmp_path, ai_timeout_seconds=1, ai_rule_fallback_enabled=False
+    )
     try:
 
         class TooSlow:

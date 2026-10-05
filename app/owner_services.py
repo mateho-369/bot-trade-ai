@@ -22,6 +22,7 @@ from app.rate_limits import WindowLimiter
 from app.read_model import OwnerReadModel
 from core.models import BotState, OrderIntent, Trade
 from core.security import sha256_json
+from trading.ai_controls import broker_ceilings
 from trading.execution import ExecutionEngine
 from trading.risk_types import position_review_hash, source_code_hash
 from trading.runtime_state import TERMINAL_INTENT_STATES, RuntimeControl
@@ -145,7 +146,7 @@ class OwnerServices:
             self.control.check(state)
             return {"state_revision": state.revision}
 
-    async def read(self, actor, section, *, limit=50, offset=0):
+    async def read(self, actor, section, *, limit=50, offset=0, level=None):
         self.require_actor(actor)
         functions = {
             "dashboard": self.views.dashboard,
@@ -156,11 +157,27 @@ class OwnerServices:
             "suggestions": self.views.suggestions,
             "settings": self.views.settings_view,
             "logs": self.views.logs,
+            "ai_journal": self.views.ai_journal,
+            "ai_fallback": self._ai_fallback_view,
+            "limits": self._limits_view,
+            "alerts": lambda **k: self._alerts_view(level=level, **k),
+            "ai_stats": self._ai_stats_view,
+            "audit": self._audit_view,
         }
         if section not in functions:
             raise OwnerInterfaceError("section_not_found", 404)
-        kwargs = {} if section in {"dashboard", "settings"} else {"limit": limit, "offset": offset}
+        if level is not None and (
+            section != "alerts" or level not in {"INFO", "WARNING", "ERROR", "CRITICAL"}
+        ):
+            raise OwnerInterfaceError("invalid_alert_level", 422)
+        kwargs = (
+            {}
+            if section in {"dashboard", "settings", "ai_fallback", "limits", "ai_stats", "audit"}
+            else {"limit": limit, "offset": offset}
+        )
         result = await asyncio.to_thread(functions[section], **kwargs)
+        if section == "settings":
+            result["ai_fallback"] = await asyncio.to_thread(self._ai_fallback_view)
         if section == "dashboard":
             result["capabilities"] = {
                 "pause": True,
@@ -209,6 +226,78 @@ class OwnerServices:
                 result["calendar"] = []
         return result
 
+    # -- AI fallback / dynamic limits / alerts (owner reads; no broker access) ----------------
+    def _ai_fallback_view(self):
+        from trading.ai_controls import ai_status, effective_limits, fallback_status
+
+        status = fallback_status(self.database, self.settings)
+        status["ai"] = ai_status(self.database, self.clock)
+        status["limits"] = effective_limits(self.database, self.settings, self.clock).as_dict()
+        status["kill_switch_unaffected"] = True
+        status["require_approval"] = bool(self.settings.ai_require_approval)
+        status["rule_fallback_enabled"] = bool(self.settings.ai_rule_fallback_enabled)
+        return status
+
+    def _ai_stats_view(self):
+        """Per-AI-label approvals, rejections, trades, win rate, net profit, confidence, failures."""
+        from ai.decision_journal import ensure_journal_tables
+        from ai.trade_attribution import ai_stats, history
+
+        try:
+            ensure_journal_tables(self.database)  # Additive/idempotent (adds provider_label if missing).
+            stats = ai_stats(self.database)
+            recent = history(self.database, limit=10)
+        except Exception:
+            stats, recent = {"labels": [], "error": "ai_stats_unavailable"}, []
+        stats["configured"] = [
+            {"label": e.label, "model": e.model, "role": e.role, "priority": e.priority, "enabled": e.enabled}
+            for e in self.settings.ai_registry()
+        ]
+        stats["decision_mode"] = self.settings.ai_decision_mode
+        stats["require_approval"] = self.settings.ai_require_approval
+        stats["recent_trades"] = recent
+        return stats
+
+    def _audit_view(self):
+        """Read-only trade audit (no writes; the daily job also syncs attribution and alerts)."""
+        from ai.trade_audit import audit_trades
+
+        try:
+            return audit_trades(self.database, self.settings, self.clock, run_sync=False)
+        except Exception:
+            return {"checked": 0, "flags": [], "counts": {}, "clean": False, "error": "audit_unavailable"}
+
+    def _limits_view(self):
+        from trading.ai_controls import (
+            DYNAMIC_BOUNDS,
+            HARD_MAX_DAILY_TRADES,
+            HARD_MAX_OPEN_POSITIONS,
+            HARD_MAX_RISK_PERCENT,
+            defaults,
+            effective_limits,
+            read_dynamic,
+        )
+
+        return {
+            "effective": effective_limits(self.database, self.settings, self.clock).as_dict(),
+            "defaults": defaults(self.settings).as_dict(),
+            "ai_overrides": {k: str(v) for k, v in read_dynamic(self.database).items()},
+            "ai_bounds": {k: [str(lo), str(hi)] for k, (lo, hi) in DYNAMIC_BOUNDS.items()},
+            "hard_caps": {
+                "max_daily_trades": HARD_MAX_DAILY_TRADES,
+                "max_open_positions": HARD_MAX_OPEN_POSITIONS,
+                "risk_percent_per_trade": str(HARD_MAX_RISK_PERCENT),
+                "max_daily_loss_percent": str(self.settings.max_daily_loss_percent),
+                "max_drawdown_percent": str(self.settings.max_drawdown_percent),
+            },
+            "owner_approval_above_change_percent": 50,
+        }
+
+    def _alerts_view(self, *, limit=100, offset=0, level=None):
+        from app.alerts import list_alerts
+
+        return list_alerts(self.database, limit=limit, offset=offset, level=level)
+
     @staticmethod
     def parameters(action, parameters):
         if type(parameters) is not dict:
@@ -217,6 +306,7 @@ class OwnerServices:
             "close_position": {"ticket", "position_identifier"},
             "approve_suggestion": {"suggestion_id"},
             "reject_suggestion": {"suggestion_id"},
+            "ack_alert": {"alert_id"},
         }
         if set(parameters) != expected.get(action, set()) or any(
             type(v) is not int or not 0 < v <= 2**63 - 1 for v in parameters.values()
@@ -237,7 +327,7 @@ class OwnerServices:
                     for p in positions
                     if p.ticket == parameters["ticket"] and p.identifier == parameters["position_identifier"]
                 )
-            if not positions or len(positions) > self.settings.max_open_positions:
+            if not positions or len(positions) > broker_ceilings(self.settings).max_open_positions:
                 raise OwnerInterfaceError("no_matching_owned_positions_or_capture_bound", 409)
             binding["positions"] = [
                 {
@@ -433,6 +523,51 @@ class OwnerServices:
                 if action == "pause"
                 else "Kill latch set; no new entries. This does not flatten the broker account.",
                 "effect_applied": True,
+            }
+        if action == "ai_reset":
+            from ai.config_adjuster import revert_all
+
+            reverted = await durable_call(revert_all, self.database, self.clock, owner_id=actor.owner_id)
+            return {
+                "status": "completed",
+                "reverted_ai_adjustments": reverted,
+                "effect_applied": True,
+                "message": "AI config overlay reverted to owner settings; no trade was opened or closed.",
+            }
+        if action in {"ai_fallback_block", "ai_fallback_technical"}:
+            from trading.ai_controls import set_fallback_mode
+
+            mode = "BLOCK_ON_AI_FAILURE" if action == "ai_fallback_block" else "TECHNICAL_ONLY"
+            status = await durable_call(
+                set_fallback_mode, self.database, self.clock, mode, owner_id=actor.owner_id
+            )
+            return {
+                "status": "completed",
+                "effect_applied": True,
+                "ai_fallback_mode": status["mode"],
+                "message": (
+                    "AI fallback: BLOCK_ON_AI_FAILURE - no new entries while the AI is unavailable."
+                    if mode == "BLOCK_ON_AI_FAILURE"
+                    else "AI fallback: TECHNICAL_ONLY - when the AI is unavailable, entries need the "
+                    f"technical score >= {self.settings.ai_rule_fallback_min_score:g}. "
+                    "Risk checks, news block and kill switch are unchanged."
+                ),
+            }
+        if action in {"ack_alerts", "ack_alert"}:
+            from app.alerts import acknowledge
+
+            count = await durable_call(
+                acknowledge,
+                self.database,
+                self.clock,
+                owner_id=actor.owner_id,
+                alert_id=parameters.get("alert_id"),
+            )
+            return {
+                "status": "completed",
+                "effect_applied": True,
+                "acknowledged": count,
+                "message": f"{count} alert(s) acknowledged.",
             }
         if self.closing:
             raise OwnerInterfaceError("runtime_stopping", 503)

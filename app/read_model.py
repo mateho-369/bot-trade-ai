@@ -119,12 +119,33 @@ class OwnerReadModel:
             query = query.where(Trade.status.in_(("open", "unknown")))
         with self.database.session() as session:
             rows = session.scalars(query.order_by(Trade.id.desc()).offset(offset).limit(limit)).all()
-            return {
-                "meta": self.meta(),
-                "items": [self._trade(r) for r in rows],
-                "limit": limit,
-                "offset": offset,
-            }
+            items = [self._trade(r) for r in rows]
+        attribution = self._attribution([item["id"] for item in items])
+        for item in items:
+            who = attribution.get(item["id"], {})
+            item["decided_by"] = who.get("decided_by", "unknown")
+            item["trailing_by"] = who.get("trailing_by", "MECHANICAL")
+            item["result"] = (
+                "open"
+                if item["closed_at"] is None
+                else ("win" if Decimal(item["profit_account"]) > 0 else "loss/flat")
+            )
+        return {"meta": self.meta(), "items": items, "limit": limit, "offset": offset}
+
+    def _attribution(self, trade_ids):
+        """Who-decided labels (trade_attribution); a missing table/row reads as unknown."""
+        if not trade_ids:
+            return {}
+        try:
+            from ai.trade_attribution import TradeAttribution
+
+            with self.database.session() as session:
+                rows = session.scalars(
+                    select(TradeAttribution).where(TradeAttribution.trade_id.in_(trade_ids))
+                ).all()
+                return {r.trade_id: {"decided_by": r.decided_by, "trailing_by": r.trailing_by} for r in rows}
+        except Exception:
+            return {}
 
     def dashboard(self):
         now = self.clock.now()
@@ -355,9 +376,13 @@ class OwnerReadModel:
                 parameters = data.get("parameters", {})
                 safe = {}
                 if type(parameters) is dict:
-                    for key in ("risk_percent", "trade_id", "position_identifier", "fraction"):
+                    for key in ("risk_percent", "trade_id", "position_identifier", "fraction", "parameter"):
                         if key in parameters and type(parameters[key]) in {str, int}:
                             safe[key] = self.text(parameters[key], 64)
+                    if "value" in parameters and type(parameters["value"]) in {str, int}:
+                        safe["value"] = self.text(parameters["value"], 64)
+                    elif type(parameters.get("value")) is list:
+                        safe["value"] = self.text(",".join(map(str, parameters["value"][:30])), 200)
                     weights = parameters.get("weights")
                     if type(weights) is dict:
                         safe["weights"] = {
@@ -409,6 +434,89 @@ class OwnerReadModel:
                 "confirmation_ttl_seconds": cfg.owner_confirmation_ttl_seconds,
             },
             "policy": "Settings are read-only. Approval does not apply proposals or alter .env/live/risk.",
+        }
+
+    def ai_journal(self, *, limit=50, offset=0):
+        """AI Decision Journal + bounded config overlay history (read-only, sanitized)."""
+        from sqlalchemy import inspect
+
+        from ai.decision_journal import AIConfigOverlay, AIDecisionJournal
+
+        self.bounds(limit, offset)
+        tables = set(inspect(self.database.engine).get_table_names())
+        if "ai_decision_journal" not in tables:
+            return {
+                "meta": self.meta(),
+                "items": [],
+                "adjustments": [],
+                "summary": {},
+                "limit": limit,
+                "offset": offset,
+            }
+        with self.database.session() as session:
+            rows = session.scalars(
+                select(AIDecisionJournal).order_by(AIDecisionJournal.id.desc()).offset(offset).limit(limit)
+            ).all()
+            items = [
+                {
+                    "id": r.id,
+                    "time": r.time.isoformat(),
+                    "kind": self.text(r.kind, 16),
+                    "symbol": self.text(r.symbol, 32) if r.symbol else None,
+                    "position_id": r.position_id,
+                    "threshold": r.threshold_reached,
+                    "source": self.text(r.source, 16),
+                    "model": self.text(r.model, 64) if r.model else None,
+                    "action": self.text(r.action, 32),
+                    "confidence": self.number(r.confidence),
+                    "reason": self.text(r.reason, 300),
+                    "executed": bool(r.executed),
+                    "final_action": self.text(r.final_action, 64) if r.final_action else None,
+                    "rejection_reason": self.text(r.rejection_reason, 128) if r.rejection_reason else None,
+                    "outcome_usd": self.text(r.outcome_usd, 40) if r.outcome_usd else None,
+                }
+                for r in rows
+            ]
+            adjustments = []
+            if "config_history" in tables:
+                adjustments = [
+                    {
+                        "id": a.id,
+                        "time": a.time.isoformat(),
+                        "parameter": self.text(a.parameter, 32),
+                        "value": self.text(
+                            a.value if not isinstance(a.value, (list, dict)) else str(a.value), 120
+                        ),
+                        "classification": self.text(a.classification, 8),
+                        "status": self.text(a.status, 12),
+                        "suggestion_id": a.suggestion_id,
+                        "previous": self.text(
+                            a.previous if not isinstance(a.previous, (list, dict)) else str(a.previous), 120
+                        )
+                        if a.previous is not None
+                        else None,
+                        "reason": self.text(a.reason, 200),
+                    }
+                    for a in session.scalars(
+                        select(AIConfigOverlay).order_by(AIConfigOverlay.id.desc()).limit(20)
+                    ).all()
+                ]
+        decided = [i for i in items if i["kind"] == "entry"]
+        summary = {
+            "decisions": len(items),
+            "ai_answers": sum(i["source"] in {"ai", "cache"} for i in items),
+            "rule_fallbacks": sum(i["source"] == "rule_fallback" for i in items),
+            "ai_blocked": sum(i["source"] == "ai_blocked" for i in items),
+            "entries_approved": sum(i["final_action"] == "approved_to_risk_engine" for i in decided),
+            "with_outcome": sum(i["outcome_usd"] is not None for i in items),
+        }
+        return {
+            "meta": self.meta(),
+            "items": items,
+            "adjustments": adjustments,
+            "summary": summary,
+            "limit": limit,
+            "offset": offset,
         }
 
     def logs(self, *, limit=50, offset=0):

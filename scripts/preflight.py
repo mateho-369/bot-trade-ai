@@ -74,7 +74,7 @@ def main(argv=None):
             inspect_sqlite_snapshot=args.inspect_sqlite_snapshot,
         )
         print(json.dumps(result, indent=2, sort_keys=True, allow_nan=False))
-        return 0 if result["overall"] == "preflight_checks_passed" else 2
+        return 0 if result["overall"] == "offline_checks_passed" else 2
     except Exception:
         # Fixed redacted refusal: never echo raw configuration, paths, SQL or exception text.
         print(

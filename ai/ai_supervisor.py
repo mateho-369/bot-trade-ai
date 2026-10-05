@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
 
 from sqlalchemy import select
 
-from ai.ai_router import AIRouter
+from ai.ai_router import FALLBACK_ELIGIBLE_OUTCOMES, AIRouter
 from ai.feature_engineering import FeatureEngineering
 from ai.model_registry import ModelRegistry
 from ai.prompt_templates import entry_request, make_request
@@ -21,10 +22,14 @@ from core.security import sanitize_text, sha256_json
 from core.settings import Settings
 from strategy.base_strategy import AIEntryReview, FeatureBundle, SignalResult
 from strategy.news_filter import NewsFilter
+from strategy.rule_fallback import rule_fallback_review
 from strategy.signal_store import SignalStore
 from strategy.volatility_filter import VolatilityFilter
+from trading.ai_controls import fallback_mode
 from trading.risk_types import NewsWindow, PositionReview, RuntimeProfile, position_review_hash
 from trading.types import BrokerError, Clock, Position, SourceKind, TradingDisabled, aware_utc
+
+LOG = logging.getLogger("ai.supervisor")
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,9 +128,37 @@ class AISupervisor:
                 clock=self.clock,
                 model_probability=probability,
             )
-            routed = await self.router.complete(request)
+            routed, outcome = await self._route_entry(request)
             if routed is None:
-                return None
+                if outcome not in FALLBACK_ELIGIBLE_OUTCOMES:
+                    return None  # Disabled/expired: deliberate veto, never a rule-based approval.
+                # News was verified above and any enabled learning filter already passed.
+                mode = await asyncio.to_thread(fallback_mode, self.database, self.settings)
+                fallback = rule_fallback_review(
+                    stored,
+                    news,
+                    settings=self.settings,
+                    profile=self.profile,
+                    now=self.clock.now(),
+                    fallback_mode=mode,
+                )
+                if mode == "BLOCK_ON_AI_FAILURE":
+                    LOG.warning("AI_FALLBACK: AI unavailable, blocking new entries")
+                else:
+                    LOG.warning("AI_FALLBACK: AI unavailable, using technical fallback")
+                await asyncio.to_thread(
+                    self.database.audit,
+                    "ai.rule_fallback_review" if fallback is not None else "ai.rule_fallback_not_permitted",
+                    "ai",
+                    {
+                        "signal_id": stored.signal_id,
+                        "ai_outcome": outcome,
+                        "fallback_mode": mode,
+                        "decision": fallback.decision if fallback is not None else None,
+                        "technical_score": stored.score,
+                    },
+                )
+                return fallback
             if routed.simulated and self.profile.data_source != SourceKind.SYNTHETIC:
                 await self._veto("entry", "simulated_provider_on_native_source")
                 return None
@@ -172,6 +205,12 @@ class AISupervisor:
                 "entry", "unbound_or_unavailable_context", signal_id=getattr(proposal, "signal_id", None)
             )
             return None
+
+    async def _route_entry(self, request):
+        complete = getattr(self.router, "complete_with_outcome", None)
+        if complete is None:  # Custom routers without outcome reporting never enable the fallback.
+            return await self.router.complete(request), "unknown"
+        return await complete(request)
 
     def _bundle(self, features: FeatureBundle):
         if (

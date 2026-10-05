@@ -286,6 +286,114 @@ class FinnhubCalendar:
             raise NewsInvalid("finnhub_calendar_contract") from None
 
 
+FAIRECONOMY_URL = "https://nfs.faireconomy.media/ff_calendar_thisweek.json"
+FAIRECONOMY_CACHE_SECONDS = 1800  # The free feed asks clients not to poll aggressively.
+FAIRECONOMY_IMPACT = {
+    "high": "high",
+    "medium": "medium",
+    "low": "low",
+    "holiday": "low",
+    "non-economic": "low",
+}
+
+
+def parse_faireconomy(raw: bytes, *, settings: Settings, fetched_at: datetime, produced_at: datetime):
+    """Weekly ForexFactory-format list [{title,country,date,impact,...}] -> complete Sun..Sun snapshot.
+
+    Fail closed: unknown impact => "unknown" (blocks), malformed rows/times => NewsInvalid."""
+    cfg = settings
+    rows = news_json(raw, cfg, array=True)
+    currencies = tuple(sorted({c for name in cfg.symbols for c in cfg.symbol_news_currencies.get(name, ())}))
+    try:
+        if not isinstance(rows, list) or not rows or len(rows) > 2000:
+            raise ValueError
+        stamps = []
+        for row in rows:
+            if not isinstance(row, dict) or not isinstance(row.get("date"), str):
+                raise ValueError
+            stamp = datetime.fromisoformat(row["date"].replace("Z", "+00:00"))
+            if stamp.tzinfo is None:
+                raise ValueError  # Never guess a timezone.
+            stamps.append(stamp)
+        first = min(stamps)
+        local = first.date() - timedelta(days=(first.weekday() + 1) % 7)  # Sunday that opens the week.
+        start = aware_utc(datetime(local.year, local.month, local.day, tzinfo=first.tzinfo))
+        finish = start + timedelta(days=7)
+        events = []
+        secrets = secret_values(cfg)
+        for row, stamp in zip(rows, stamps, strict=True):
+            at = aware_utc(stamp)
+            if not start <= at < finish:
+                raise ValueError
+            country = row.get("country")
+            if not isinstance(country, str):
+                raise ValueError
+            country = country.strip().upper()
+            if country == "ALL":
+                affected = currencies
+            elif len(country) == 3 and country.isalpha():
+                affected = (country,) if country in currencies else ()
+            else:
+                raise ValueError
+            raw_impact = row.get("impact")
+            if not isinstance(raw_impact, str):
+                raise ValueError
+            impact = FAIRECONOMY_IMPACT.get(raw_impact.strip().lower(), "unknown")
+            title = plain_text(row.get("title"), limit=300, secrets=secrets, required=True)
+            for currency in affected:
+                identity = sha256_json({"src": "faireconomy", "c": currency, "t": title, "at": at})
+                events.append(EconomicEvent(identity, title, currency, at, at, impact))
+        snapshot = CalendarSnapshot(
+            FaireconomyCalendar.source_id,
+            produced_at,
+            fetched_at,
+            start,
+            finish,
+            currencies,
+            tuple(events),
+            True,
+            "provider",
+            False,
+        )
+        if not snapshot.events and not cfg.calendar_allow_empty_reviewed:
+            raise ValueError
+        return replace(snapshot, source_digest=hashlib.sha256(raw).hexdigest())
+    except (KeyError, TypeError, ValueError, BrokerError):
+        raise NewsInvalid("faireconomy_calendar_contract") from None
+
+
+class FaireconomyCalendar:
+    """Free weekly calendar (nfs.faireconomy.media). Cached 30 min; owner must review its scope."""
+
+    source_id = "calendar:faireconomy"
+
+    def __init__(self, settings: Settings, clock: Clock, http: NewsHTTP):
+        self.settings, self.clock, self.http = settings, clock, http
+        self._cached = None
+
+    async def fetch(self):
+        cfg = self.settings
+        if not cfg.use_economic_calendar or not cfg.calendar_faireconomy_reviewed:
+            raise NewsUnavailable("faireconomy_calendar_scope_not_reviewed")
+        now = self.clock.now()
+        if self._cached is not None and 0 <= (now - self._cached.fetched_at).total_seconds() < (
+            FAIRECONOMY_CACHE_SECONDS
+        ):
+            return self._cached
+        response = await self.http.get(cfg.calendar_source_url or FAIRECONOMY_URL)
+        fetched = self.clock.now()
+        snapshot = await asyncio.to_thread(
+            parse_faireconomy,
+            response.raw,
+            settings=cfg,
+            fetched_at=fetched,
+            produced_at=fetched - timedelta(seconds=response.age_seconds),
+        )
+        snapshot = replace(snapshot, fixture_only=self.http.fixture_only)
+        self._cached = snapshot
+        return snapshot
+
+
 class DisabledCalendar:
     source_id = "calendar:disabled"
 
@@ -303,4 +411,6 @@ def calendar_adapter(settings: Settings, clock: Clock, http: NewsHTTP):
         return FileCalendar(settings, clock)
     if mode == "json_http":
         return JSONCalendar(settings, clock, http)
+    if mode == "faireconomy":
+        return FaireconomyCalendar(settings, clock, http)
     return FinnhubCalendar(settings, clock, http)

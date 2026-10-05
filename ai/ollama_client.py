@@ -20,22 +20,31 @@ class ProviderContent:
 
 
 class OllamaClient:
-    name = "ollama"
-
-    def __init__(self, settings: Settings, *, transport: httpx.AsyncBaseTransport | None = None):
+    def __init__(
+        self,
+        settings: Settings,
+        *,
+        transport: httpx.AsyncBaseTransport | None = None,
+        base_url: str | None = None,
+        model: str | None = None,
+        label: str | None = None,
+    ):
         self.settings = settings
+        self.base_url = (base_url or settings.ollama_base_url).rstrip("/")
+        self.model = model or settings.ollama_model
+        self.name = label or "ollama"
         self.http = JSONTransport(settings, transport=transport)
 
     @property
     def configured(self):
-        return bool(self.settings.ollama_model)
+        return bool(self.model)
 
     async def complete(self, messages: list[dict], schema: dict) -> ProviderContent:
         cfg = self.settings
         response = await self.http.post(
-            cfg.ollama_base_url + "/api/chat",
+            self.base_url + "/api/chat",
             {
-                "model": cfg.ollama_model,
+                "model": self.model,
                 "messages": messages,
                 "stream": False,
                 "format": schema,
@@ -44,9 +53,9 @@ class OllamaClient:
         )
         try:
             message, model = response["message"], response["model"]
-            allowed = {cfg.ollama_model}
-            if ":" not in cfg.ollama_model.rsplit("/", 1)[-1]:
-                allowed.add(cfg.ollama_model + ":latest")
+            allowed = {self.model}
+            if ":" not in self.model.rsplit("/", 1)[-1]:
+                allowed.add(self.model + ":latest")
             if (
                 response.get("done") is not True
                 or response.get("done_reason") not in {None, "stop"}

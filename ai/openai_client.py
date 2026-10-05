@@ -9,44 +9,63 @@ import httpx
 from ai.http_transport import JSONTransport
 from ai.json_validation import AIInvalidResponse, AIUnavailable
 from ai.ollama_client import ProviderContent
-from core.settings import Settings
+from core.settings import Settings, legacy_ai_label
 
 
 class OpenAIClient:
-    name = "openai"
+    def __init__(
+        self,
+        settings: Settings,
+        *,
+        transport: httpx.AsyncBaseTransport | None = None,
+        model: str | None = None,
+        base_url: str | None = None,
+        api_key: str | None = None,
+        label: str | None = None,
+    ):
+        """``model`` overrides OPENAI_MODEL per client (e.g. AI_DEEP_MODEL for nightly reviews).
 
-    def __init__(self, settings: Settings, *, transport: httpx.AsyncBaseTransport | None = None):
+        ``base_url``/``api_key``/``label`` come from one AI_PROVIDERS registry entry; the defaults are
+        the legacy OPENAI_* settings with a host-derived label (``groq`` for api.groq.com).
+        """
         self.settings = settings
+        self.model = cfg_model = model if model is not None else settings.openai_model
+        if not re.fullmatch(r"[A-Za-z0-9_./:@+-]{1,128}", cfg_model):
+            raise AIUnavailable("invalid_model_identifier")
+        self.base_url = (base_url or settings.openai_base_url).rstrip("/")
+        self._api_key = api_key if api_key is not None else settings.openai_api_key.get_secret_value()
+        self.name = label or legacy_ai_label("openai", self.base_url)
         self.http = JSONTransport(settings, transport=transport)
 
     @property
     def configured(self):
-        return bool(self.settings.openai_api_key.get_secret_value())
+        return bool(self._api_key)
 
     async def complete(self, messages: list[dict], schema: dict) -> ProviderContent:
         cfg = self.settings
         if not self.configured:
             raise AIUnavailable("missing_api_key")
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": 0,
+            "max_tokens": cfg.ai_max_output_tokens,
+            "stream": False,
+            "response_format": self._response_format(schema),
+        }
+        if cfg.openai_reasoning_effort:
+            payload["reasoning_effort"] = cfg.openai_reasoning_effort
         response = await self.http.post(
-            cfg.openai_base_url + "/chat/completions",
-            {
-                "model": cfg.openai_model,
-                "messages": messages,
-                "temperature": 0,
-                "max_tokens": cfg.ai_max_output_tokens,
-                "stream": False,
-                "response_format": {"type": "json_object"},
-            },
-            headers={"Authorization": "Bearer " + cfg.openai_api_key.get_secret_value()},
+            self.base_url + "/chat/completions",
+            payload,
+            headers={"Authorization": "Bearer " + self._api_key},
         )
         try:
             choices, model = response["choices"], response["model"]
             if not isinstance(choices, list) or len(choices) != 1 or not isinstance(model, str):
                 raise ValueError
             # Alias or its dated resolution only; never accept an arbitrary different model.
-            if model != cfg.openai_model and not re.fullmatch(
-                re.escape(cfg.openai_model) + r"-\d{4}-\d{2}-\d{2}", model
-            ):
+            if model != self.model and not re.fullmatch(re.escape(self.model) + r"-\d{4}-\d{2}-\d{2}", model):
                 raise ValueError
             choice = choices[0]
             if choice.get("finish_reason") != "stop" or choice.get("index") != 0:
@@ -65,6 +84,33 @@ class OpenAIClient:
             return ProviderContent(self.name, model, text, self.http.simulated)
         except (ValueError, KeyError, TypeError, AttributeError, UnicodeError):
             raise AIInvalidResponse("invalid_openai_envelope") from None
+
+    def _response_format(self, schema: dict) -> dict:
+        """Provider JSON enforcement. Local strict decoding/bindings run regardless of this mode."""
+        if self.settings.openai_response_format != "json_schema_strict":
+            return {"type": "json_object"}
+        from ai.ai_first_schemas import schema_name
+        from ai.schemas import REPLY_CLASSES, strict_output_schema
+
+        reviewed = schema_name(schema)  # AI-first contracts are already strict, reviewed schemas.
+        if reviewed is not None:
+            return {
+                "type": "json_schema",
+                "json_schema": {"name": f"reflex_ai_first_{reviewed}_v1", "strict": True, "schema": schema},
+            }
+        purpose = next(
+            (name for name, cls in REPLY_CLASSES.items() if cls.model_json_schema() == schema), None
+        )
+        if purpose is None:
+            raise AIInvalidResponse("unknown_reply_schema")  # Never send an unreviewed schema.
+        return {
+            "type": "json_schema",
+            "json_schema": {
+                "name": f"reflex_ai_{purpose}_v1",
+                "strict": True,
+                "schema": strict_output_schema(purpose),
+            },
+        }
 
     async def close(self):
         await self.http.close()

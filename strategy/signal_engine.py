@@ -19,9 +19,11 @@ from strategy.base_strategy import (
     TechnicalDecision,
 )
 from strategy.feature_engine import FeatureEngine
+from strategy.rule_fallback import rule_fallback_review
 from strategy.signal_store import SignalStore
 from strategy.strategy_router import StrategyRouter
 from strategy.volatility_filter import VolatilityFilter
+from trading.ai_controls import fallback_mode
 from trading.price_rules import snap
 from trading.risk_types import NewsWindow, RuntimeProfile
 from trading.simulation import SimulatedBroker
@@ -167,7 +169,12 @@ class SignalEngine:
     async def evaluate(
         self, logical_symbol: str, *, reviewer: EntryReviewer | None = None, news: NewsWindow | None = None
     ) -> SignalResult:
-        """Convenience path; absent/error/timeout AI or news is a final veto, not fallback approval."""
+        """Convenience path. Unsafe/unknown news or an absent reviewer is a final veto.
+
+        A reviewer TIMEOUT uses the deterministic rule-based fallback when policy permits (see
+        strategy.rule_fallback); provider failures inside AISupervisor are handled there. Any other
+        reviewer exception remains a fail-closed veto. Finalization re-verifies every review.
+        """
         news = news if news is not None else NewsWindow()
         proposal = await self.analyze(logical_symbol)
         if proposal.state != "pending":
@@ -180,14 +187,41 @@ class SignalEngine:
                         review = await reviewer.review(proposal, news)
             except asyncio.CancelledError:
                 raise
+            except TimeoutError:
+                review = await self._timeout_fallback(proposal, news)
             except Exception:
                 await asyncio.to_thread(
                     self.database.audit,
                     "signal.ai_review_unavailable",
                     "signals",
-                    {"signal_id": proposal.signal_id, "reason": "provider_error_or_timeout"},
+                    {"signal_id": proposal.signal_id, "reason": "provider_error"},
                 )
         return await self.finalize(proposal.signal_id, review=review, news=news)
+
+    async def _timeout_fallback(self, proposal: SignalResult, news: NewsWindow):
+        # An interrupted review cannot prove an enabled learning filter passed: stay vetoed then.
+        review = None
+        if not self.settings.model_filter_enabled:
+            review = rule_fallback_review(
+                proposal,
+                news,
+                settings=self.settings,
+                profile=self.profile,
+                now=self.clock.now(),
+                fallback_mode=fallback_mode(self.database, self.settings),
+            )
+        await asyncio.to_thread(
+            self.database.audit,
+            "signal.ai_review_unavailable",
+            "signals",
+            {
+                "signal_id": proposal.signal_id,
+                "reason": "provider_timeout",
+                "rule_fallback": review is not None,
+                "decision": review.decision if review is not None else None,
+            },
+        )
+        return review
 
     async def evaluate_many(
         self, *, reviewer: EntryReviewer | None = None, news_by_symbol: dict[str, NewsWindow] | None = None

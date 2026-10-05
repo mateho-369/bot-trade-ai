@@ -200,3 +200,74 @@ def decode_reply(content: str, purpose: Purpose, binding: dict) -> Reply:
         return reply
     except (ValueError, TypeError, KeyError, ArithmeticError):
         raise AIInvalidResponse("invalid_or_unbound_reply") from None
+
+
+# ---------------------------------------------------------------- provider strict output schemas
+
+_STRICT_KEYS = frozenset({"type", "enum", "properties", "required", "additionalProperties", "items", "anyOf"})
+_NULLABLE_DECIMAL_TEXT = {"anyOf": [{"type": "string"}, {"type": "null"}]}
+_STRICT_OVERRIDES = {
+    # Decimal fields are bounded TEXT locally (decimal_text); never advertise floats to a provider.
+    "risk_percent": _NULLABLE_DECIMAL_TEXT,
+    "close_fraction": _NULLABLE_DECIMAL_TEXT,
+    "weights": {
+        "anyOf": [
+            {
+                "type": "object",
+                "properties": {
+                    name: {"type": "string"} for name in ("trend", "mean_reversion", "breakout", "momentum")
+                },
+                "required": ["trend", "mean_reversion", "breakout", "momentum"],
+                "additionalProperties": False,
+            },
+            {"type": "null"},
+        ]
+    },
+}
+
+
+def _strict_node(node):
+    if not isinstance(node, dict):
+        raise ValueError("unsupported schema node")
+    result = {}
+    if "const" in node:
+        result["enum"] = [node["const"]]
+    for key, value in node.items():
+        if key not in _STRICT_KEYS:
+            continue  # pattern/length/range/title keywords are enforced LOCALLY by pydantic instead.
+        if key == "properties":
+            result[key] = {name: _strict_node(child) for name, child in value.items()}
+        elif key == "items":
+            result[key] = _strict_node(value)
+        elif key == "anyOf":
+            result[key] = [_strict_node(child) for child in value]
+        elif key == "additionalProperties":
+            if value is not False:
+                raise ValueError("strict provider schemas need closed objects")
+            result[key] = False
+        else:
+            result[key] = value
+    if result.get("type") == "object" or "properties" in result:
+        result["required"] = sorted(result.get("properties", {}))
+        result["additionalProperties"] = False
+    return result
+
+
+def strict_output_schema(purpose: Purpose) -> dict:
+    """Provider-side constrained-decoding subset (all fields required, closed objects).
+
+    Advisory to the provider ONLY: every reply is still decoded by the full local pydantic model and
+    request bindings, so a provider ignoring or weakening this schema cannot widen what is accepted.
+    """
+    source = REPLY_CLASSES[purpose].model_json_schema()
+    if "$defs" in source or "$ref" in str(source):
+        raise ValueError("strict provider schema expects a flat reply model")
+    properties = {}
+    for name, child in source["properties"].items():
+        properties[name] = _STRICT_OVERRIDES.get(name) or _strict_node(child)
+    return {
+        "type": "object",
+        "properties": properties,
+        "required": sorted(properties),
+        "additionalProperties": False,
+    }

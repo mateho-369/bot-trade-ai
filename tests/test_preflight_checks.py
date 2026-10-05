@@ -401,6 +401,8 @@ def test_opt_in_probes_use_only_their_own_temporary_files_and_never_open_the_db(
 def test_unwritable_state_directory_is_blocked_without_permission_change(tmp_path):
     if os.name == "nt":
         pytest.skip("POSIX permission bits are the exercised mechanism")
+    if hasattr(os, "geteuid") and os.geteuid() == 0:
+        pytest.skip("root bypasses POSIX permission bits, so an unwritable directory cannot be simulated")
     cfg = settings(tmp_path)
     for name in ("data", "data/logs", "data/backups"):
         (tmp_path / name).mkdir(parents=True)
@@ -541,3 +543,30 @@ def test_unparsable_power_output_is_refused_not_guessed():
     findings, observed = inspect_power(windows=True, enabled=True, runner=runner)
     assert codes({"findings": list(findings)})["power_settings_query_refused"] == "warning"
     assert "SENTINEL" not in dumped({"findings": list(findings), "observations": observed})
+
+
+# ---------------------------------------------------------------- CLI exit code (Part 15)
+
+
+@pytest.mark.parametrize(("blocked", "expected"), [(False, 0), (True, 2)])
+def test_preflight_cli_exit_code_matches_the_reported_overall(monkeypatch, capsys, blocked, expected):
+    """Regression: the CLI compared against a status the report never emits, so it always exited 2."""
+    import json
+
+    import scripts.preflight as cli
+    from readiness.contracts import ReportBuilder
+
+    class VerifiedIntegrity:
+        integrity_verified = True
+
+        def to_dict(self):
+            return {"integrity_verified": True}
+
+    builder = ReportBuilder("development")
+    builder.add("test_only_fixture", "blocked" if blocked else "passed", "fixture")
+    document = builder.document(VerifiedIntegrity())
+    monkeypatch.setattr(cli, "deployment_preflight", lambda *a, **k: document)
+    assert cli.main([]) == expected
+    data = json.loads(capsys.readouterr().out)
+    assert data["overall"] == ("blocked" if blocked else "offline_checks_passed")
+    assert data["trading_authorized"] is False

@@ -49,6 +49,9 @@ async def test_preview_public_dataset_no_auth_or_trading_capability(services):
         "approve_suggestion",
         "reject_suggestion",
         "cancel_confirmation",
+        "ai_fallback",
+        "ai_reset",
+        "alerts/ack",
     ],
 )
 async def test_every_preview_mutation_denied_without_writes(services, action):

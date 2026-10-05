@@ -216,8 +216,14 @@ class DurableWriteAuthority:
                     )
                 evidence = ()
                 confirmed = False
+                fast_track = False
                 try:
-                    evidence = self.stages.required_evidence(session, snapshot.account)
+                    evidence, fast_track = self.stages.entry_evidence(session, snapshot.account)
+                    minimum = snapshot.symbol.volume_min
+                    if (fast_track or cfg.demo_min_lot_only) and command.order.volume != minimum:
+                        decision = replace(
+                            decision, approved=False, reasons=decision.reasons + ("demo_min_lot_required",)
+                        )
                     confirmed = cfg.mode != OperatingMode.LIVE or self.stages.live_confirmed(
                         session, snapshot.account, self.control.session_id, evidence
                     )
@@ -257,6 +263,7 @@ class DurableWriteAuthority:
                         risk_account=str(snapshot.worst_loss_account),
                         authorized_at=now.isoformat(),
                         evidence_ids=list(evidence),
+                        demo_fast_track=fast_track,
                         account_currency=snapshot.account.currency,
                         data_source=self.profile.data_source.value,
                     )
@@ -443,7 +450,14 @@ class DurableWriteAuthority:
                     self_counted=row.request.get("count_day") == risk.day.isoformat(),
                 )
                 try:
-                    evidence = self.stages.required_evidence(session, snapshot.account)
+                    evidence, fast_track = self.stages.entry_evidence(session, snapshot.account)
+                    if fast_track != bool(row.request.get("demo_fast_track")) or (
+                        (fast_track or self.settings.demo_min_lot_only)
+                        and command.order.volume != snapshot.symbol.volume_min
+                    ):
+                        decision = replace(
+                            decision, approved=False, reasons=decision.reasons + ("demo_fast_track_changed",)
+                        )
                     if self.settings.mode == OperatingMode.LIVE and not self.stages.live_confirmed(
                         session, snapshot.account, self.control.session_id, evidence
                     ):
@@ -565,6 +579,7 @@ class DurableWriteAuthority:
                 "execution",
                 {
                     "key": command.idempotency_key,
+                    "operation": command.operation.value,
                     "status": result.status.value,
                     "order": result.order_ticket,
                     "deal": result.deal_ticket,

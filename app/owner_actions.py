@@ -22,7 +22,16 @@ from core.models import AuditLog, BotState, OwnerApproval
 from core.security import sha256_json
 
 CONFIRMED_ACTIONS = {"resume", "close_position", "close_all", "approve_suggestion"}
-DIRECT_ACTIONS = {"pause", "kill", "reject_suggestion"}
+DIRECT_ACTIONS = {
+    "pause",
+    "kill",
+    "reject_suggestion",
+    "ai_reset",
+    "ai_fallback_block",
+    "ai_fallback_technical",
+    "ack_alerts",
+    "ack_alert",
+}
 TOKEN = re.compile(r"[A-Za-z0-9_-]{43}\Z")
 OUTCOMES = {"completed", "rejected", "uncertain"}
 
