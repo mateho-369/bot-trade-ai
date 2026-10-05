@@ -1,0 +1,21 @@
+{
+  "archive": "/home/user/MT5_AI_ReflexBot_Parts_01_14.zip",
+  "sha256": "f573d346276602eb16f8e4d6aa964c665b19bb0960c36dc0ab88b4d6799c0032",
+  "archive_bytes": 4914399,
+  "zip_entries": 397,
+  "verified_hashes": 396,
+  "python_sources": 313,
+  "guide_full_file_sections": 340,
+  "tested_runnable_config_parity": 327,
+  "complete_python_set_equal": true,
+  "zip_crc_verified": true,
+  "all_sha_and_lengths_verified": true,
+  "full_literal_guide_verified": true,
+  "independent_clean_validation_passed": true,
+  "working_tests": 2528,
+  "clean_tests": 2528,
+  "original_ledger_raw_sha_unchanged": true,
+  "original_ledger_mtime_unchanged": false,
+  "database_schema": 2,
+  "no_genuine_native_or_strategy_qualification": true
+}

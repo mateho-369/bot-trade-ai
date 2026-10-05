@@ -1,0 +1,386 @@
+{
+  "root": "/home/user/_part12_final_code_clean/mt5_ai_reflex_bot",
+  "label": "clean",
+  "python": "/home/user/mt5_ai_reflex_bot/.venv/bin/python",
+  "commands": [
+    {
+      "name": "pytest",
+      "command": [
+        "/home/user/mt5_ai_reflex_bot/.venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short"
+      ],
+      "exit_code": 0,
+      "seconds": 297.84,
+      "output_tail": "[ 10%]\n........................................................................ [ 13%]\n........................................................................ [ 16%]\n........................................................................ [ 20%]\n........................................................................ [ 23%]\n........................................................................ [ 26%]\n........................................................................ [ 30%]\n........................................................................ [ 33%]\n........................................................................ [ 36%]\n........................................................................ [ 40%]\n........................................................................ [ 43%]\n........................................................................ [ 47%]\n........................................................................ [ 50%]\n........................................................................ [ 53%]\n........................................................................ [ 57%]\n........................................................................ [ 60%]\n........................................................................ [ 63%]\n........................................................................ [ 67%]\n........................................................................ [ 70%]\n........................................................................ [ 73%]\n........................................................................ [ 77%]\n........................................................................ [ 80%]\n........................................................................ [ 83%]\n........................................................................ [ 87%]\n........................................................................ [ 90%]\n........................................................................ [ 94%]\n........................................................................ [ 97%]\n.......................................................                  [100%]\n2143 passed in 292.17s (0:04:52)\n"
+    },
+    {
+      "name": "ruff_check",
+      "command": [
+        "/home/user/mt5_ai_reflex_bot/.venv/bin/ruff",
+        "check",
+        "."
+      ],
+      "exit_code": 0,
+      "seconds": 0.15,
+      "output_tail": "All checks passed!\n"
+    },
+    {
+      "name": "ruff_format",
+      "command": [
+        "/home/user/mt5_ai_reflex_bot/.venv/bin/ruff",
+        "format",
+        "--check",
+        "."
+      ],
+      "exit_code": 0,
+      "seconds": 0.52,
+      "output_tail": "311 files already formatted\n"
+    },
+    {
+      "name": "compileall",
+      "command": [
+        "/home/user/mt5_ai_reflex_bot/.venv/bin/python",
+        "-m",
+        "compileall",
+        "-q",
+        "core",
+        "trading",
+        "strategy",
+        "ai",
+        "news",
+        "app",
+        "telegram_bot",
+        "miniapp",
+        "scripts",
+        "tests",
+        "backtesting",
+        "readiness",
+        "main.py",
+        "config.py",
+        "watchdog.py",
+        "launcher.py"
+      ],
+      "exit_code": 0,
+      "seconds": 0.27,
+      "output_tail": ""
+    },
+    {
+      "name": "pip_check",
+      "command": [
+        "/home/user/mt5_ai_reflex_bot/.venv/bin/python",
+        "-m",
+        "pip",
+        "check"
+      ],
+      "exit_code": 0,
+      "seconds": 0.63,
+      "output_tail": "No broken requirements found.\n"
+    },
+    {
+      "name": "pip_freeze",
+      "command": [
+        "/home/user/mt5_ai_reflex_bot/.venv/bin/python",
+        "-m",
+        "pip",
+        "freeze"
+      ],
+      "exit_code": 0,
+      "seconds": 0.42,
+      "output_tail": "aiofiles==25.1.0\naiogram==3.31.0\naiohappyeyeballs==2.7.1\naiohttp==3.14.3\naiosignal==1.4.0\nannotated-doc==0.0.5\nannotated-types==0.8.0\nanyio==4.15.1\nAPScheduler==3.11.3\nattrs==26.1.0\ncertifi==2026.7.22\nclick==8.5.0\ncloudpickle==3.1.2\ndefusedxml==0.7.1\nfastapi==0.142.2\nfeedparser==6.0.14\nfeedparser-sgmllib==2.1.0\nfrozenlist==1.8.0\nh11==0.16.0\nhttpcore==1.0.9\nhttpx==0.28.1\nidna==3.20\niniconfig==2.3.0\njoblib==1.6.0\nlightgbm==4.7.0\nmagic-filter==1.0.12\nmultidict==6.9.1\nnarwhals==2.26.0\nnumpy==2.4.6\nopentelemetry-api==1.45.0\npackaging==26.3\npandas==3.0.6\npluggy==1.6.0\npropcache==0.5.4\npsutil==7.2.2\npydantic==2.13.5\npydantic-settings==2.15.0\npydantic_core==2.46.5\nPygments==2.21.0\npytest==9.1.1\npytest-asyncio==1.4.0\npython-dateutil==2.9.0.post0\npython-dotenv==1.2.4\nruff==0.16.10\nscikit-learn==1.9.1\nscipy==1.18.1\nsix==1.17.0\nSQLAlchemy==2.1.2\nstarlette==1.7.0\nta==0.11.0\nthreadpoolctl==3.7.0\ntyping-inspection==0.4.4\ntyping_extensions==4.16.0\ntzdata==2026.4\ntzlocal==5.4.4\nuvicorn==0.54.0\nyarl==1.25.1\n"
+    },
+    {
+      "name": "smoke_mock",
+      "command": [
+        "/home/user/mt5_ai_reflex_bot/.venv/bin/python",
+        "-m",
+        "scripts.smoke_mock"
+      ],
+      "exit_code": 0,
+      "seconds": 0.78,
+      "output_tail": "{\n  \"source\": \"synthetic\",\n  \"simulated_only\": true,\n  \"eligible_stage_evidence\": false,\n  \"native_sdk_imported\": false,\n  \"real_orders_sent\": 0,\n  \"mode\": \"paper\",\n  \"finalized_candles\": 300,\n  \"duplicate_open_sent_once\": true,\n  \"volume\": \"0.02\",\n  \"nominal_risk_account\": \"4.9400\",\n  \"risk_budget_account\": \"5.0\",\n  \"target_usd\": \"5.43400\",\n  \"simulated_net_usd\": \"5.760000000000000000000000000\",\n  \"ending_simulated_balance\": \"1005.760000000000000000000000\",\n  \"deals\": 2,\n  \"positions\": 0,\n  \"warning\": \"Artificial quotes; this is NOT profitability evidence or permission to trade.\"\n}\n"
+    },
+    {
+      "name": "smoke_risk",
+      "command": [
+        "/home/user/mt5_ai_reflex_bot/.venv/bin/python",
+        "-m",
+        "scripts.smoke_risk"
+      ],
+      "exit_code": 0,
+      "seconds": 1.46,
+      "output_tail": "{\n  \"source\": \"synthetic\",\n  \"simulated_only\": true,\n  \"eligible_stage_evidence\": false,\n  \"native_sdk_imported\": false,\n  \"real_orders_sent\": 0,\n  \"startup_pause_veto_verified\": true,\n  \"duplicate_entry_sent_once\": true,\n  \"restart_started_paused\": true,\n  \"protective_management_while_paused_and_killed\": true,\n  \"verified_historical_lock_level\": 30.0,\n  \"protected_sl\": \"1.101060000000\",\n  \"volume\": \"0.02\",\n  \"risk_account\": \"4.8600000\",\n  \"risk_budget_account\": \"5.0\",\n  \"original_target_usd\": \"5.34600000\",\n  \"net_simulated_account\": \"2.84000000\",\n  \"ending_simulated_balance\": \"1002.8400000\",\n  \"pre_restart_balance\": \"999.93\",\n  \"entries_today\": 1,\n  \"reserved_risk_usd\": \"0E-8\",\n  \"intent_states\": [\n    \"reconciled\",\n    \"reconciled\",\n    \"reconciled\",\n    \"rejected\"\n  ],\n  \"positions\": 0,\n  \"warning\": \"Engineered quotes; NOT profitability/backtest/promotion/live permission.\"\n}\n"
+    },
+    {
+      "name": "smoke_signals",
+      "command": [
+        "/home/user/mt5_ai_reflex_bot/.venv/bin/python",
+        "-m",
+        "scripts.smoke_signals"
+      ],
+      "exit_code": 0,
+      "seconds": 1.69,
+      "output_tail": "{\n  \"source\": \"synthetic\",\n  \"simulated_only\": true,\n  \"eligible_stage_evidence\": false,\n  \"native_sdk_imported\": false,\n  \"real_orders_sent\": 0,\n  \"aggregation_consistent_historical_data\": false,\n  \"ai_confidence_is_scripted\": true,\n  \"missing_reviews_vetoed\": true,\n  \"approved_signal_did_not_auto_resume\": true,\n  \"duplicate_entry_sent_once\": true,\n  \"closed_signal_did_not_reopen\": true,\n  \"weights\": {\n    \"trend\": \"0.30\",\n    \"mean_reversion\": \"0.25\",\n    \"breakout\": \"0.20\",\n    \"momentum\": \"0.25\"\n  },\n  \"coverage\": \"0.55\",\n  \"agreement\": \"1\",\n  \"technical_score\": 83.328045,\n  \"ai_score_scripted\": 90,\n  \"finalized_bars_each_timeframe\": 300,\n  \"volume\": \"0.02\",\n  \"sl\": \"1.09814\",\n  \"original_target_usd\": \"5.23600000\",\n  \"net_simulated_account\": \"5.56000000\",\n  \"ending_simulated_balance\": \"1005.5600000\",\n  \"signal_rows\": 2,\n  \"entry_intents\": 1,\n  \"positions\": 0,\n  \"warning\": \"Engineered OHLC/quotes/reviews; NOT strategy profitability, promotion or live permission.\"\n}\n"
+    },
+    {
+      "name": "smoke_ai",
+      "command": [
+        "/home/user/mt5_ai_reflex_bot/.venv/bin/python",
+        "-m",
+        "scripts.smoke_ai"
+      ],
+      "exit_code": 0,
+      "seconds": 3.62,
+      "output_tail": "{\n  \"source\": \"synthetic\",\n  \"scripted_provider_http\": true,\n  \"actual_http_network_calls\": 0,\n  \"real_orders_sent\": 0,\n  \"native_sdk_imported\": false,\n  \"confidence_is_scripted_not_an_ai_assessment\": true,\n  \"fallback_for_availability_verified\": true,\n  \"approved_signal_did_not_resume\": true,\n  \"unapproved_risk_change_vetoed_entry\": true,\n  \"duplicate_and_closed_signal_did_not_reopen\": true,\n  \"cost_inclusive_label_verified\": true,\n  \"reconciled_trade_labels\": 1,\n  \"synthetic_toy_training_rows\": 480,\n  \"actual_training_algorithm\": \"logistic\",\n  \"purged_oos_folds\": 5,\n  \"candidate_was_inactive\": true,\n  \"research_only_selection_scope\": \"backtest\",\n  \"synthetic_promotion_vetoed\": true,\n  \"owner_stopped_projection_risk_percent\": \"0.2\",\n  \"running_settings_were_not_mutated\": true,\n  \"eligible_stage_evidence\": false,\n  \"warning\": \"SCRIPTED HTTP/quotes/confidence/toy labels; NOT provider evaluation, strategy profitability, promotion or live permission.\"\n}\n"
+    },
+    {
+      "name": "smoke_news",
+      "command": [
+        "/home/user/mt5_ai_reflex_bot/.venv/bin/python",
+        "-m",
+        "scripts.smoke_news"
+      ],
+      "exit_code": 0,
+      "seconds": 3.02,
+      "output_tail": "{\n  \"synthetic\": true,\n  \"scripted_http_transport_only\": true,\n  \"actual_http_network_calls\": 0,\n  \"real_orders\": 0,\n  \"simulated_orders\": 0,\n  \"native_sdk_imported\": false,\n  \"eligible_stage_evidence\": false,\n  \"symbols_initially_safe\": 2,\n  \"fixture_http_requests\": 10,\n  \"checks\": {\n    \"startup_unknown\": true,\n    \"fresh_scoped_fixture_proof\": true,\n    \"cross_symbol_veto\": true,\n    \"304_preserves_publication_and_first_seen\": true,\n    \"new_epoch_revokes_old_green\": true,\n    \"breaking_usd_news_blocks\": true,\n    \"calendar_currency_scope_and_future_deadline\": true,\n    \"pre_event_boundary_invalidates_without_poll\": true,\n    \"independent_calendar_block\": true,\n    \"provider_failure_never_restores_green\": true,\n    \"poll_does_not_resume_owner_state\": true\n  },\n  \"warning\": \"SCRIPTED headlines/calendar/HTTP; NOT entitled feed validation, authentic coverage, market evidence or live permission.\"\n}\n"
+    },
+    {
+      "name": "smoke_owner_interface",
+      "command": [
+        "/home/user/mt5_ai_reflex_bot/.venv/bin/python",
+        "-m",
+        "scripts.smoke_owner_interface"
+      ],
+      "exit_code": 0,
+      "seconds": 5.56,
+      "output_tail": "{\n  \"warning\": \"TEST_ONLY HMAC/update/ASGI and artificial prices; NOT Telegram authenticity, native execution, profitability or stage permission.\",\n  \"checks\": [\n    \"unauthenticated_denied\",\n    \"eight_authenticated_SQL_views\",\n    \"single_use_revision_fenced_resume_and_replay\",\n    \"captured_owned_close_once_no_flat_claim\",\n    \"proposal_approval_not_application_or_trade\",\n    \"no_open_live_or_apply_routes\",\n    \"expired_bearer_not_renewed_locally\",\n    \"actual_aiogram_owner_private_scripted_reply\",\n    \"group_command_silent_deny\"\n  ],\n  \"checks_passed\": 9,\n  \"actual_http_network_calls\": 0,\n  \"actual_telegram_network_calls\": 0,\n  \"scripted_telegram_api_methods\": 1,\n  \"simulated_orders\": 2,\n  \"real_orders\": 0,\n  \"simulated_position_identifier\": 500001,\n  \"native_sdk_imported\": false,\n  \"eligible_stage_evidence\": false\n}\n"
+    },
+    {
+      "name": "smoke_runtime",
+      "command": [
+        "/home/user/mt5_ai_reflex_bot/.venv/bin/python",
+        "-m",
+        "scripts.smoke_runtime"
+      ],
+      "exit_code": 0,
+      "seconds": 3.29,
+      "output_tail": "{\n  \"actual_child_processes_spawned\": 0,\n  \"actual_native_broker_calls\": 0,\n  \"actual_provider_network_calls\": 0,\n  \"actual_telegram_network_calls\": 0,\n  \"automatic_resume\": false,\n  \"checks\": {\n    \"always_start_paused\": true,\n    \"learning_disabled\": true,\n    \"no_order_intents\": true,\n    \"no_telegram_transport\": true,\n    \"paused_entry_job_has_no_effect\": true,\n    \"paused_protection_still_runs\": true,\n    \"same_guarded_resources\": true,\n    \"scripted_confirmed_exit_restart\": true,\n    \"scripted_restart_never_resumes\": true,\n    \"scripted_supervisor_launch_paused\": true,\n    \"shutdown_paused_released\": true,\n    \"stopped_recovery_backup\": true,\n    \"unconfigured_news_unknown\": true\n  },\n  \"checks_passed\": 13,\n  \"credentials_loaded\": false,\n  \"eligible_stage_evidence\": false,\n  \"fixture_only\": true,\n  \"native_sdk_imported\": false,\n  \"real_orders\": 0,\n  \"simulated_order_operations\": 0\n}\n"
+    },
+    {
+      "name": "smoke_backtest",
+      "command": [
+        "/home/user/mt5_ai_reflex_bot/.venv/bin/python",
+        "-m",
+        "scripts.smoke_backtest"
+      ],
+      "exit_code": 0,
+      "seconds": 8.92,
+      "output_tail": "{\n  \"actual_child_processes_spawned\": 0,\n  \"actual_native_broker_calls\": 0,\n  \"actual_provider_network_calls\": 0,\n  \"actual_telegram_network_calls\": 0,\n  \"automatic_resume_production\": false,\n  \"checks_passed\": 13,\n  \"credentials_loaded\": false,\n  \"demonstrates_profitability\": false,\n  \"eligible_stage_evidence\": false,\n  \"financial_history_reset\": false,\n  \"fixture_only\": true,\n  \"genuine_strategy_qualification\": false,\n  \"historical_data_authenticity_verified\": false,\n  \"native_sdk_imported\": false,\n  \"real_orders\": 0,\n  \"simulated_closes\": 1,\n  \"simulated_entries\": 1,\n  \"synthetic_trade_net_account\": \"-0.54000000\"\n}\n"
+    },
+    {
+      "name": "smoke_readiness",
+      "command": [
+        "/home/user/mt5_ai_reflex_bot/.venv/bin/python",
+        "-m",
+        "scripts.smoke_readiness"
+      ],
+      "exit_code": 0,
+      "seconds": 0.61,
+      "output_tail": "{\n  \"actual_child_processes_spawned\": 0,\n  \"actual_native_broker_calls\": 0,\n  \"actual_provider_network_calls\": 0,\n  \"actual_telegram_network_calls\": 0,\n  \"automatic_resume\": false,\n  \"checks_passed\": 14,\n  \"credentials_used\": false,\n  \"eligible_stage_evidence\": false,\n  \"financial_history_reset\": false,\n  \"fixture_only\": true,\n  \"genuine_source_attestation\": false,\n  \"native_sdk_imported\": false,\n  \"production_state_writes\": 0,\n  \"readiness_operations_state_writes\": 0,\n  \"real_orders\": 0,\n  \"smoke_creates_temporary_fixtures\": true\n}\n"
+    },
+    {
+      "name": "ui_js_syntax",
+      "command": [
+        "node",
+        "--check",
+        "/home/user/_part12_final_code_clean/mt5_ai_reflex_bot/miniapp/static/app.js"
+      ],
+      "exit_code": 0,
+      "seconds": 0.36,
+      "output_tail": ""
+    },
+    {
+      "name": "ui_loader_syntax",
+      "command": [
+        "node",
+        "--check",
+        "/home/user/_part12_final_code_clean/mt5_ai_reflex_bot/miniapp/static/telegram_loader.js"
+      ],
+      "exit_code": 0,
+      "seconds": 0.03,
+      "output_tail": ""
+    },
+    {
+      "name": "inspect_news_sources",
+      "command": [
+        "/home/user/mt5_ai_reflex_bot/.venv/bin/python",
+        "-m",
+        "scripts.inspect_news_sources"
+      ],
+      "exit_code": 0,
+      "seconds": 0.84,
+      "output_tail": "{\n  \"mode\": \"paper\",\n  \"startup\": \"paused\",\n  \"sources\": [],\n  \"unconfigured_required_ids\": [],\n  \"calendar_provider\": \"auto\",\n  \"warning\": \"Scope and realtime/entitlement need owner review; zero HTTP calls performed.\"\n}\n"
+    },
+    {
+      "name": "cli_check-config",
+      "command": [
+        "/home/user/mt5_ai_reflex_bot/.venv/bin/python",
+        "/home/user/_part12_final_code_clean/mt5_ai_reflex_bot/main.py",
+        "--env-file",
+        "/tmp/reflex-part12-cli-1i57joba/.env",
+        "check-config"
+      ],
+      "exit_code": 0,
+      "seconds": 0.51,
+      "output_tail": "{\n  \"mode\": \"paper\",\n  \"backend\": \"mock\",\n  \"startup\": \"paused\",\n  \"symbols\": [\n    \"XAUUSD\",\n    \"BTCUSD\",\n    \"EURUSD\",\n    \"GBPUSD\",\n    \"ETHUSD\"\n  ],\n  \"risk_percent\": \"0.5\",\n  \"live_risk_percent\": \"0.1\",\n  \"effective_risk_percent\": \"0.5\",\n  \"daily_loss_percent\": \"3\",\n  \"drawdown_percent\": \"10\",\n  \"max_daily_trades\": 12,\n  \"min_daily_trades_target\": 6,\n  \"max_open_positions\": 3,\n  \"target_profit_usd\": \"5\",\n  \"min_net_reward_risk\": \"1.1\",\n  \"timeframes\": [\n    \"M5\",\n    \"M15\",\n    \"H1\"\n  ],\n  \"strategy_weights\": {\n    \"trend\": \"0.3\",\n    \"mean_reversion\": \"0.25\",\n    \"breakout\": \"0.2\",\n    \"momentum\": \"0.25\"\n  },\n  \"strategy_min_agreeing\": 2,\n  \"strategy_min_coverage\": \"0.50\",\n  \"strategy_min_agreement\": \"0.80\",\n  \"trailing_levels\": [\n    [\n      30.0,\n      30.0\n    ],\n    [\n      60.0,\n      60.0\n    ],\n    [\n      90.0,\n      90.0\n    ]\n  ],\n  \"news_required\": true,\n  \"news_source_policy_count\": 0,\n  \"calendar_provider\": \"auto\",\n  \"telegram_configured\": false,\n  \"ai_provider\": \"ollama\",\n  \"model_filter_enabled\": false,\n  \"model_algorithm\": \"logistic\",\n  \"config_fingerprint\": \"13a8618634396152aef6c9a13fe43e519e6f9bfbd587c5e3e25bade129dae233\",\n  \"strategy_fingerprint\": \"27ef8ad81cc8f26c1b516e7d5c885df8ccf6cdbce715ebadd188c4fcb93a75a5\"\n}\n"
+    },
+    {
+      "name": "cli_init-db",
+      "command": [
+        "/home/user/mt5_ai_reflex_bot/.venv/bin/python",
+        "/home/user/_part12_final_code_clean/mt5_ai_reflex_bot/main.py",
+        "--env-file",
+        "/tmp/reflex-part12-cli-1i57joba/.env",
+        "init-db"
+      ],
+      "exit_code": 0,
+      "seconds": 0.56,
+      "output_tail": "{\n  \"database\": \"ok\",\n  \"schema_version\": 2,\n  \"mode\": \"paper\",\n  \"state\": \"paused\",\n  \"kill_switch\": false,\n  \"revision\": 0,\n  \"heartbeat\": null\n}\n"
+    },
+    {
+      "name": "cli_status",
+      "command": [
+        "/home/user/mt5_ai_reflex_bot/.venv/bin/python",
+        "/home/user/_part12_final_code_clean/mt5_ai_reflex_bot/main.py",
+        "--env-file",
+        "/tmp/reflex-part12-cli-1i57joba/.env",
+        "status"
+      ],
+      "exit_code": 0,
+      "seconds": 0.53,
+      "output_tail": "{\n  \"database\": \"ok\",\n  \"schema_version\": 2,\n  \"mode\": \"paper\",\n  \"state\": \"paused\",\n  \"kill_switch\": false,\n  \"revision\": 0,\n  \"heartbeat\": null\n}\n"
+    }
+  ],
+  "all_passed": true,
+  "pytest_passed": 2143,
+  "pytest_seconds": 292.17,
+  "format_inputs": 311,
+  "freeze_matches": true,
+  "news_smoke": {
+    "synthetic": true,
+    "scripted_http_transport_only": true,
+    "actual_http_network_calls": 0,
+    "real_orders": 0,
+    "simulated_orders": 0,
+    "native_sdk_imported": false,
+    "eligible_stage_evidence": false,
+    "symbols_initially_safe": 2,
+    "fixture_http_requests": 10,
+    "checks": {
+      "startup_unknown": true,
+      "fresh_scoped_fixture_proof": true,
+      "cross_symbol_veto": true,
+      "304_preserves_publication_and_first_seen": true,
+      "new_epoch_revokes_old_green": true,
+      "breaking_usd_news_blocks": true,
+      "calendar_currency_scope_and_future_deadline": true,
+      "pre_event_boundary_invalidates_without_poll": true,
+      "independent_calendar_block": true,
+      "provider_failure_never_restores_green": true,
+      "poll_does_not_resume_owner_state": true
+    },
+    "warning": "SCRIPTED headlines/calendar/HTTP; NOT entitled feed validation, authentic coverage, market evidence or live permission."
+  },
+  "owner_interface_smoke": {
+    "warning": "TEST_ONLY HMAC/update/ASGI and artificial prices; NOT Telegram authenticity, native execution, profitability or stage permission.",
+    "checks": [
+      "unauthenticated_denied",
+      "eight_authenticated_SQL_views",
+      "single_use_revision_fenced_resume_and_replay",
+      "captured_owned_close_once_no_flat_claim",
+      "proposal_approval_not_application_or_trade",
+      "no_open_live_or_apply_routes",
+      "expired_bearer_not_renewed_locally",
+      "actual_aiogram_owner_private_scripted_reply",
+      "group_command_silent_deny"
+    ],
+    "checks_passed": 9,
+    "actual_http_network_calls": 0,
+    "actual_telegram_network_calls": 0,
+    "scripted_telegram_api_methods": 1,
+    "simulated_orders": 2,
+    "real_orders": 0,
+    "simulated_position_identifier": 500001,
+    "native_sdk_imported": false,
+    "eligible_stage_evidence": false
+  },
+  "runtime_smoke": {
+    "actual_child_processes_spawned": 0,
+    "actual_native_broker_calls": 0,
+    "actual_provider_network_calls": 0,
+    "actual_telegram_network_calls": 0,
+    "automatic_resume": false,
+    "checks": {
+      "always_start_paused": true,
+      "learning_disabled": true,
+      "no_order_intents": true,
+      "no_telegram_transport": true,
+      "paused_entry_job_has_no_effect": true,
+      "paused_protection_still_runs": true,
+      "same_guarded_resources": true,
+      "scripted_confirmed_exit_restart": true,
+      "scripted_restart_never_resumes": true,
+      "scripted_supervisor_launch_paused": true,
+      "shutdown_paused_released": true,
+      "stopped_recovery_backup": true,
+      "unconfigured_news_unknown": true
+    },
+    "checks_passed": 13,
+    "credentials_loaded": false,
+    "eligible_stage_evidence": false,
+    "fixture_only": true,
+    "native_sdk_imported": false,
+    "real_orders": 0,
+    "simulated_order_operations": 0
+  },
+  "backtest_smoke": {
+    "actual_child_processes_spawned": 0,
+    "actual_native_broker_calls": 0,
+    "actual_provider_network_calls": 0,
+    "actual_telegram_network_calls": 0,
+    "automatic_resume_production": false,
+    "checks_passed": 13,
+    "credentials_loaded": false,
+    "demonstrates_profitability": false,
+    "eligible_stage_evidence": false,
+    "financial_history_reset": false,
+    "fixture_only": true,
+    "genuine_strategy_qualification": false,
+    "historical_data_authenticity_verified": false,
+    "native_sdk_imported": false,
+    "real_orders": 0,
+    "simulated_closes": 1,
+    "simulated_entries": 1,
+    "synthetic_trade_net_account": "-0.54000000"
+  },
+  "readiness_smoke": {
+    "actual_child_processes_spawned": 0,
+    "actual_native_broker_calls": 0,
+    "actual_provider_network_calls": 0,
+    "actual_telegram_network_calls": 0,
+    "automatic_resume": false,
+    "checks_passed": 14,
+    "credentials_used": false,
+    "eligible_stage_evidence": false,
+    "financial_history_reset": false,
+    "fixture_only": true,
+    "genuine_source_attestation": false,
+    "native_sdk_imported": false,
+    "production_state_writes": 0,
+    "readiness_operations_state_writes": 0,
+    "real_orders": 0,
+    "smoke_creates_temporary_fixtures": true
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "actual_child_processes_spawned": 0,
+  "actual_native_broker_calls": 0,
+  "actual_portable_model_inference": true,
+  "actual_provider_network_calls": 0,
+  "actual_telegram_network_calls": 0,
+  "automatic_resume_production": false,
+  "checks_passed": 16,
+  "eligible_stage_evidence": false,
+  "engineered_probability_approval_and_veto_exercised": true,
+  "financial_history_reset": false,
+  "fixture_only": true,
+  "genuine_model_provenance_verified": false,
+  "genuine_owner_authenticated": false,
+  "historical_model_availability_verified": false,
+  "native_sdk_imported": false,
+  "predictive_skill_demonstrated": false,
+  "production_model_activated": false,
+  "real_orders": 0
+}

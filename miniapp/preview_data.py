@@ -1,0 +1,344 @@
+"""Hand-authored UI fixture. NOT actual Telegram auth, market data or profits.
+
+Only mounted by explicit preview-only composition without owner/broker/providers.
+Every number, headline, position, signal and proposal below is artificial.
+"""
+
+from copy import deepcopy
+
+FIXTURE = {
+    "preview_only": True,
+    "warning": (
+        "SYNTHETIC UI PREVIEW — artificial figures; no owner authentication, trading, "
+        "provider calls or stage evidence."
+    ),
+    "dashboard": {
+        "meta": {
+            "generated_at": "2026-10-03T12:00:00+00:00",
+            "mode": "paper",
+            "source": "synthetic_ui_fixture",
+            "fixture_only": True,
+            "runtime_attached": False,
+            "broker_read": False,
+            "not_stage_evidence": True,
+        },
+        "runtime": {
+            "desired_state": "paused",
+            "kill_switch_active": False,
+            "revision": 0,
+            "lease_current": False,
+            "heartbeat_age_seconds": None,
+            "recovery_required": False,
+            "last_error": None,
+            "unsettled_intents": 0,
+            "entries_permitted_by_dashboard": False,
+        },
+        "kpis": {
+            "currency": "USD",
+            "balance": "1000.00",
+            "equity": "1012.40",
+            "margin": "38.00",
+            "free_margin": "974.40",
+            "observation_at": "2026-10-03T12:00:00+00:00",
+            "observation_age_seconds": 0,
+            "observation_current": False,
+            "realized_today_account": "12.40",
+            "today_currency_verified": False,
+            "accepted_entries_today": 4,
+            "closed_today": 4,
+            "wins_today": 3,
+            "open_count": 2,
+            "unknown_count": 0,
+            "daily_loss_latched": False,
+            "drawdown_latched": False,
+            "reserved_risk_usd": "0.00",
+        },
+        "equity_curve": [
+            {"time": f"2026-10-03T{hour:02}:00:00+00:00", "equity": str(value)}
+            for hour, value in enumerate(
+                [
+                    1000,
+                    1000,
+                    999.8,
+                    1002.5,
+                    1001.8,
+                    1003.2,
+                    1003.2,
+                    1005.8,
+                    1004.9,
+                    1006.1,
+                    1005.7,
+                    1009.3,
+                    1008.6,
+                    1010.2,
+                    1010.2,
+                    1012.4,
+                ]
+            )
+        ],
+        "targets": {"daily_target": 6, "daily_maximum": 12, "trade_target_usd": "5"},
+        "safety": [
+            "Quality first, never force a trade",
+            "Backtest → paper → demo → approved small live",
+            "Owner confirmations are single-use",
+            "Illustrative data; not trading evidence",
+        ],
+        "capabilities": {
+            "pause": False,
+            "kill": False,
+            "resume": False,
+            "close_owned": False,
+            "decide_proposal": False,
+            "open_orders": False,
+            "enable_live": False,
+            "apply_proposals": False,
+        },
+    },
+    "positions": {
+        "items": [
+            {
+                "id": 1,
+                "ticket": 900001,
+                "position_identifier": 700001,
+                "symbol": "EURUSD",
+                "direction": "buy",
+                "volume": "0.01",
+                "entry_price": "1.10020",
+                "sl": "1.09880",
+                "tp": "1.10320",
+                "currency": "USD",
+                "opened_at": "2026-10-03T10:42:00+00:00",
+                "profit_account": "0.00",
+                "floating_pnl": None,
+                "strategy": "Trend continuation",
+                "status": "open",
+                "lock_level": 30,
+                "target_usd": "5.00",
+                "owned_close_candidate": False,
+                "config_current": False,
+            },
+            {
+                "id": 2,
+                "ticket": 900002,
+                "position_identifier": 700002,
+                "symbol": "XAUUSD",
+                "direction": "sell",
+                "volume": "0.01",
+                "entry_price": "2651.40",
+                "sl": "2654.90",
+                "tp": "2646.20",
+                "currency": "USD",
+                "opened_at": "2026-10-03T11:16:00+00:00",
+                "profit_account": "0.00",
+                "floating_pnl": None,
+                "strategy": "Structure breakout",
+                "status": "open",
+                "lock_level": 60,
+                "target_usd": "5.00",
+                "owned_close_candidate": False,
+                "config_current": False,
+            },
+        ]
+    },
+    "trades": {
+        "items": [
+            {
+                "id": 3,
+                "symbol": "GBPUSD",
+                "direction": "buy",
+                "volume": "0.01",
+                "strategy": "Candle confluence",
+                "status": "closed",
+                "profit_account": "5.20",
+                "currency": "USD",
+                "closed_at": "2026-10-03T09:15:00+00:00",
+            },
+            {
+                "id": 4,
+                "symbol": "EURUSD",
+                "direction": "sell",
+                "volume": "0.01",
+                "strategy": "Trend continuation",
+                "status": "closed",
+                "profit_account": "-2.80",
+                "currency": "USD",
+                "closed_at": "2026-10-03T08:40:00+00:00",
+            },
+        ]
+    },
+    "signals": {
+        "items": [
+            {
+                "id": 1,
+                "time": "2026-10-03T12:00:00+00:00",
+                "symbol": "EURUSD",
+                "timeframe": "M5",
+                "strategy": "Trend continuation",
+                "direction": "buy",
+                "score": 82,
+                "ai_score": 86,
+                "final_decision": "wait",
+                "config_current": False,
+            },
+            {
+                "id": 2,
+                "time": "2026-10-03T11:55:00+00:00",
+                "symbol": "XAUUSD",
+                "timeframe": "M5",
+                "strategy": "Structure breakout",
+                "direction": "sell",
+                "score": 78,
+                "ai_score": 80,
+                "final_decision": "wait",
+                "config_current": False,
+            },
+            {
+                "id": 3,
+                "time": "2026-10-03T11:50:00+00:00",
+                "symbol": "BTCUSD",
+                "timeframe": "M5",
+                "strategy": "Momentum confirmation",
+                "direction": "wait",
+                "score": 54,
+                "ai_score": 62,
+                "final_decision": "rejected",
+                "config_current": False,
+            },
+        ]
+    },
+    "news": {
+        "coverage": {"status": "unknown", "reason": "Synthetic fixtures do not grant news clearance"},
+        "calendar": [
+            {
+                "id": "fixture-1",
+                "title": "Illustrative employment release",
+                "currency": "USD",
+                "starts_at": "2026-10-03T12:30:00+00:00",
+                "impact": "high",
+                "tentative": True,
+            },
+            {
+                "id": "fixture-2",
+                "title": "Illustrative central-bank remarks",
+                "currency": "EUR",
+                "starts_at": "2026-10-03T14:00:00+00:00",
+                "impact": "medium",
+                "tentative": True,
+            },
+        ],
+        "items": [
+            {
+                "id": 1,
+                "published_at": "2026-10-03T11:42:00+00:00",
+                "first_seen_at": "2026-10-03T11:43:00+00:00",
+                "source": "Synthetic fixture",
+                "title": "Dollar exposure: review the next economic release",
+                "summary": "An invented headline for interface design. It is not an actual current event.",
+                "impact": "high",
+                "sentiment": 0,
+                "symbols": ["EURUSD", "XAUUSD"],
+            },
+            {
+                "id": 2,
+                "published_at": "2026-10-03T10:58:00+00:00",
+                "first_seen_at": "2026-10-03T10:59:00+00:00",
+                "source": "Synthetic fixture",
+                "title": "Keep position sizing disciplined through volatility",
+                "summary": "Illustrative copy only. No genuine news provider was queried.",
+                "impact": "medium",
+                "sentiment": 0,
+                "symbols": ["BTCUSD"],
+            },
+        ],
+    },
+    "suggestions": {
+        "items": [
+            {
+                "id": 1,
+                "type": "reduce_risk",
+                "status": "pending",
+                "stored_status": "pending",
+                "risk_level": "low",
+                "reason": "Illustrative proposal: reduce per-trade risk during a volatile regime.",
+                "parameters": {"risk_percent": "0.40"},
+                "config_current": False,
+                "approval_is_application": False,
+                "approval_executes_trade": False,
+            },
+            {
+                "id": 2,
+                "type": "rebalance_weights",
+                "status": "approved",
+                "stored_status": "approved",
+                "risk_level": "medium",
+                "reason": "Illustrative approval awaiting separate stopped, flat owner review.",
+                "parameters": {},
+                "config_current": False,
+                "approval_is_application": False,
+                "approval_executes_trade": False,
+            },
+        ]
+    },
+    "settings": {
+        "editable": False,
+        "values": {
+            "mode": "paper",
+            "demo_mode": True,
+            "paper_trading": True,
+            "live_trading": False,
+            "symbols": ["EURUSD", "GBPUSD", "XAUUSD", "BTCUSD", "ETHUSD"],
+            "max_risk_percent_per_trade": "0.5",
+            "max_daily_loss_percent": "3",
+            "max_drawdown_percent": "10",
+            "max_open_positions": 3,
+            "max_daily_trades": 12,
+            "min_daily_trades_target": 6,
+            "target_net_profit_usd": "5",
+            "min_signal_score": 70,
+            "ai_confidence_threshold": 70,
+            "trailing_levels": [[30, 30], [60, 60], [90, 90]],
+            "atr_trailing_enabled": True,
+            "allow_tp_extension": False,
+            "strategy_weights": {
+                "trend": "0.30",
+                "candlestick": "0.25",
+                "breakout": "0.20",
+                "momentum": "0.25",
+            },
+        },
+        "policy": "Read-only fixture settings. No risk/live/application controls.",
+    },
+    "logs": {
+        "items": [
+            {
+                "id": 1,
+                "time": "2026-10-03T12:00:00+00:00",
+                "action": "fixture.signal_reviewed_wait",
+                "source": "synthetic_ui",
+            },
+            {
+                "id": 2,
+                "time": "2026-10-03T11:58:00+00:00",
+                "action": "fixture.proposal_stored_pending",
+                "source": "synthetic_ui",
+            },
+            {
+                "id": 3,
+                "time": "2026-10-03T11:54:00+00:00",
+                "action": "fixture.protection_improved",
+                "source": "synthetic_ui",
+            },
+            {
+                "id": 4,
+                "time": "2026-10-03T11:50:00+00:00",
+                "action": "fixture.runtime_paused",
+                "source": "synthetic_ui",
+            },
+        ]
+    },
+}
+FIXTURE["dashboard"]["positions"] = FIXTURE["positions"]["items"]
+
+
+def preview_data():
+    return deepcopy(FIXTURE)

@@ -1,0 +1,20 @@
+{
+  "declared_files": 352,
+  "declared_python_sources": 281,
+  "findings": [
+    {
+      "code": "release_bytes_verified",
+      "message": "All declared hashes/lengths and the bounded runnable/config file set match.",
+      "status": "passed"
+    }
+  ],
+  "format": "reflex-release-verification-v1",
+  "integrity_verified": true,
+  "is_signature": false,
+  "manifest_sha256": "9083a2ac68e97792ca4a731f6b92aa6beca7794afd61108674c2d08499329905",
+  "manifest_valid": true,
+  "release": "0.10.0",
+  "trading_permission": false,
+  "trusted_anchor_supplied": true,
+  "verified_files": 352
+}

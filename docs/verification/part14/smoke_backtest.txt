@@ -1,0 +1,20 @@
+{
+  "actual_child_processes_spawned": 0,
+  "actual_native_broker_calls": 0,
+  "actual_provider_network_calls": 0,
+  "actual_telegram_network_calls": 0,
+  "automatic_resume_production": false,
+  "checks_passed": 13,
+  "credentials_loaded": false,
+  "demonstrates_profitability": false,
+  "eligible_stage_evidence": false,
+  "financial_history_reset": false,
+  "fixture_only": true,
+  "genuine_strategy_qualification": false,
+  "historical_data_authenticity_verified": false,
+  "native_sdk_imported": false,
+  "real_orders": 0,
+  "simulated_closes": 1,
+  "simulated_entries": 1,
+  "synthetic_trade_net_account": "-0.54000000"
+}

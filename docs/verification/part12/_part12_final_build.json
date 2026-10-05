@@ -1,0 +1,11 @@
+{
+  "archive": "/home/user/MT5_AI_ReflexBot_Parts_01_12.zip",
+  "sha256": "3262aae01d983a7cadc8218b9a2cf3fcfaad80aa23a4829d615ebb1285651ee2",
+  "files": 353,
+  "hashed": 352,
+  "python_sources": 281,
+  "source_guide_files": 306,
+  "guide_lines": 52458,
+  "archive_bytes": 3650000,
+  "independent_clean_extraction_validated": true
+}

@@ -1,0 +1,14 @@
+{
+  "checks": {
+    "watchdog_no_kill_terminate_send_signal_calls": true,
+    "task_at_logon_current_user": true,
+    "task_interactive_limited": true,
+    "task_rejects_session_zero": true,
+    "task_no_password_argument": true,
+    "terminal_default_configurable": true,
+    "terminal_mock_mode_no_launch": true
+  },
+  "native_executed": false,
+  "native_syntax_validated": false,
+  "not_deployment_or_live_permission": true
+}

@@ -1,0 +1,43 @@
+# Secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.initdata
+*owner_initdata*.txt
+*owner-initdata*.txt
+
+# Python / tools
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage/
+htmlcov/
+*.egg-info/
+
+# Local runtime state, market data, models, logs and backups
+data/**
+!data/**/
+!data/**/.gitkeep
+*.db
+*.db-shm
+*.db-wal
+*.sqlite*
+
+# Build artifacts / OS
+build/
+dist/
+package/
+*.spec
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+# Lock files may contain private package-index credentials; review before commit.
+requirements.*.lock.txt

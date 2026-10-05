@@ -1,0 +1,22 @@
+{
+  "actual_child_processes_spawned": 0,
+  "actual_native_broker_calls": 0,
+  "actual_portable_logistic_audit": true,
+  "actual_provider_network_calls": 0,
+  "actual_telegram_network_calls": 0,
+  "auditor_application_state_writes": 0,
+  "automatic_resume": false,
+  "checks_passed": 14,
+  "eligible_stage_evidence": false,
+  "financial_history_reset": false,
+  "fixture_only": true,
+  "genuine_owner_authenticated": false,
+  "historical_provenance_verified": false,
+  "native_sdk_imported": false,
+  "private_memory_sql_only": true,
+  "production_model_activated": false,
+  "production_state_writes": 0,
+  "real_orders": 0,
+  "smoke_creates_disposable_fixtures": true,
+  "trading_authorized": false
+}

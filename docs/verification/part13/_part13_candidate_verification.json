@@ -1,0 +1,25 @@
+{
+  "declared_files": 371,
+  "declared_python_sources": 294,
+  "findings": [
+    {
+      "code": "release_bytes_verified",
+      "message": "All declared hashes/lengths and the bounded runnable/config file set match.",
+      "status": "passed"
+    },
+    {
+      "code": "trusted_anchor_not_supplied",
+      "message": "Content comparison only: an attacker can replace source AND manifest. Verify an independently trusted archive/digest.",
+      "status": "warning"
+    }
+  ],
+  "format": "reflex-release-verification-v1",
+  "integrity_verified": true,
+  "is_signature": false,
+  "manifest_sha256": "4730ba0263c3edf07bea7097cacc51d109296cf77f83e41cda80a03804bb71a6",
+  "manifest_valid": true,
+  "release": "0.11.0",
+  "trading_permission": false,
+  "trusted_anchor_supplied": false,
+  "verified_files": 371
+}

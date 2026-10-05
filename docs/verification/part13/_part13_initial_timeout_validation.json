@@ -1,0 +1,21 @@
+{
+  "root": "/home/user/mt5_ai_reflex_bot",
+  "label": "working",
+  "python": "/home/user/mt5_ai_reflex_bot/.venv/bin/python",
+  "commands": [
+    {
+      "name": "pytest",
+      "command": [
+        "/home/user/mt5_ai_reflex_bot/.venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short"
+      ],
+      "exit_code": 1,
+      "seconds": 509.61,
+      "output_tail": "rocess.py:556: in run\n    stdout, stderr = process.communicate(input, timeout=timeout)\n                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n/usr/local/lib/python3.13/subprocess.py:1222: in communicate\n    stdout, stderr = self._communicate(input, endtime, timeout)\n                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n/usr/local/lib/python3.13/subprocess.py:2155: in _communicate\n    self._check_timeout(endtime, orig_timeout, stdout, stderr)\n/usr/local/lib/python3.13/subprocess.py:1269: in _check_timeout\n    raise TimeoutExpired(\nE   subprocess.TimeoutExpired: Command '['/home/user/mt5_ai_reflex_bot/.venv/bin/python', '-m', 'scripts.smoke_mock']' timed out after 15 seconds\n___________ test_readonly_diagnostic_cannot_connect_native_on_linux ____________\ntests/test_trading_diagnostics.py:44: in test_readonly_diagnostic_cannot_connect_native_on_linux\n    result = subprocess.run(\n/usr/local/lib/python3.13/subprocess.py:556: in run\n    stdout, stderr = process.communicate(input, timeout=timeout)\n                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n/usr/local/lib/python3.13/subprocess.py:1222: in communicate\n    stdout, stderr = self._communicate(input, endtime, timeout)\n                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n/usr/local/lib/python3.13/subprocess.py:2155: in _communicate\n    self._check_timeout(endtime, orig_timeout, stdout, stderr)\n/usr/local/lib/python3.13/subprocess.py:1269: in _check_timeout\n    raise TimeoutExpired(\nE   subprocess.TimeoutExpired: Command '['/home/user/mt5_ai_reflex_bot/.venv/bin/python', '-m', 'scripts.check_mt5_readonly', '--env-file', '.env.example']' timed out after 10 seconds\n=========================== short test summary info ============================\nFAILED tests/test_risk_concurrency.py::test_cross_process_locked_reservations_cannot_both_use_same_free_equity\nFAILED tests/test_runtime_settings_health.py::test_runtime_modules_import_without_artifacts\nFAILED tests/test_trading_diagnostics.py::test_smoke_module_cli_does_not_touch_db_or_native_sdk\nFAILED tests/test_trading_diagnostics.py::test_readonly_diagnostic_cannot_connect_native_on_linux\n4 failed, 2323 passed in 502.15s (0:08:22)\n"
+    }
+  ],
+  "all_passed": false
+}

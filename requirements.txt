@@ -1,0 +1,33 @@
+# Direct dependencies pinned to an available, Python 3.11-compatible baseline.
+# Part 9 reuses FastAPI/uvicorn/aiogram/httpx; vanilla UI needs no npm/CDN build.
+# Generate and audit a platform-specific transitive lock after validation;
+# do not reuse a Linux lock for the Windows MT5 deployment.
+pydantic==2.13.5
+pydantic-settings==2.15.0
+python-dotenv==1.2.4
+SQLAlchemy==2.1.2
+fastapi==0.142.2
+uvicorn==0.54.0
+aiogram==3.31.0
+APScheduler==3.11.3
+httpx==0.28.1
+pandas==3.0.6
+numpy==2.4.6
+ta==0.11.0
+scikit-learn==1.9.1
+threadpoolctl==3.7.0
+lightgbm==4.7.0
+joblib==1.6.0
+feedparser==6.0.14
+defusedxml==0.7.1
+psutil==7.2.2
+tzdata==2026.4
+pytest==9.1.1
+pytest-asyncio==1.4.0
+MetaTrader5==5.0.6231; sys_platform == "win32"
+
+# Optional PostgreSQL, packaging and advanced ML; install explicitly as needed:
+# psycopg[binary]==3.3.6
+# pyinstaller==6.22.3
+# torch  # choose a tested CPU/CUDA build for your platform; not required.
+# pip-audit==2.10.1  # deployment dependency audit, not a runtime dependency.

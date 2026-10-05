@@ -1,0 +1,18 @@
+{
+  "actual_child_processes_spawned": 0,
+  "actual_native_broker_calls": 0,
+  "actual_provider_network_calls": 0,
+  "actual_telegram_network_calls": 0,
+  "automatic_resume": false,
+  "checks_passed": 14,
+  "credentials_used": false,
+  "eligible_stage_evidence": false,
+  "financial_history_reset": false,
+  "fixture_only": true,
+  "genuine_source_attestation": false,
+  "native_sdk_imported": false,
+  "production_state_writes": 0,
+  "readiness_operations_state_writes": 0,
+  "real_orders": 0,
+  "smoke_creates_temporary_fixtures": true
+}

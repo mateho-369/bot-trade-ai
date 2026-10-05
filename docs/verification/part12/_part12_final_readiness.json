@@ -1,0 +1,114 @@
+{
+  "actual_child_processes_spawned": 0,
+  "actual_native_broker_calls": 0,
+  "actual_provider_network_calls": 0,
+  "actual_telegram_network_calls": 0,
+  "application_state_writes": 0,
+  "automatic_resume": false,
+  "blocking_findings": 0,
+  "broker_connected": false,
+  "financial_history_reset": false,
+  "findings": [
+    {
+      "code": "direct_dependency_metadata_matches",
+      "message": "Pinned direct distribution metadata matches; no package/SDK was imported or contacted.",
+      "status": "passed"
+    },
+    {
+      "code": "transitive_audit_not_performed",
+      "message": "Metadata matching is not pip consistency, transitive lock validation, vulnerability auditing or a native import test.",
+      "status": "not_checked"
+    },
+    {
+      "code": "configuration_validated",
+      "message": "Explicit file/defaults passed the existing complete Settings validators; no settings were applied or credentials transported.",
+      "status": "passed"
+    },
+    {
+      "code": "state_paths_scoped",
+      "message": "Configured state paths stay under this unlinked source root; none was created or opened for writing.",
+      "status": "passed"
+    },
+    {
+      "code": "development_platform_observed",
+      "message": "Development platform inspected; this profile does not qualify Windows/native deployment.",
+      "status": "passed"
+    },
+    {
+      "code": "disk_space_floor",
+      "message": "Read-only free-space observation checked a 512 MiB diagnostic floor, not write permission or future capacity.",
+      "status": "passed"
+    },
+    {
+      "code": "database_state_not_inspected",
+      "message": "Database schema/state was not inspected. Use the explicit stopped/checkpointed SQLite snapshot flag or separately validate PostgreSQL; no ledger was created.",
+      "status": "not_checked"
+    },
+    {
+      "code": "diagnostic_not_native_qualification",
+      "message": "Offline checks are not actual-platform soak, restore, SDK/provider/owner/security tests, signed stage evidence or live approval.",
+      "status": "not_checked"
+    }
+  ],
+  "format": "reflex-readiness-v1",
+  "integrity": {
+    "declared_files": 352,
+    "declared_python_sources": 281,
+    "findings": [
+      {
+        "code": "release_bytes_verified",
+        "message": "All declared hashes/lengths and the bounded runnable/config file set match.",
+        "status": "passed"
+      },
+      {
+        "code": "trusted_anchor_not_supplied",
+        "message": "Content comparison only: an attacker can replace source AND manifest. Verify an independently trusted archive/digest.",
+        "status": "warning"
+      }
+    ],
+    "integrity_verified": true,
+    "is_signature": false,
+    "manifest_sha256": "9083a2ac68e97792ca4a731f6b92aa6beca7794afd61108674c2d08499329905",
+    "manifest_valid": true,
+    "release": "0.10.0",
+    "trading_permission": false,
+    "trusted_anchor_supplied": false,
+    "verified_files": 352
+  },
+  "native_validation_complete": false,
+  "observations": {
+    "configuration": {
+      "backend": "mock",
+      "config_fingerprint": "13a8618634396152aef6c9a13fe43e519e6f9bfbd587c5e3e25bade129dae233",
+      "live_enabled_in_configuration": false,
+      "mode": "paper",
+      "model_filter_enabled": false,
+      "mt5_login_triplet_configured": false,
+      "process_environment_values_used": false,
+      "runtime_process_override_count": 0,
+      "source": "explicit_environment_file",
+      "start_paused": true,
+      "symbol_count": 5,
+      "telegram_pair_configured": false
+    },
+    "dependencies": {
+      "different": 0,
+      "matching": 21,
+      "missing": 0,
+      "required": 21
+    },
+    "host": {
+      "free_disk_meets_512mib_floor": true,
+      "interpreter_bits": 64,
+      "terminal_file_observed": false,
+      "windows": false
+    }
+  },
+  "offline_only": true,
+  "overall": "offline_checks_passed",
+  "owner_authenticated": false,
+  "profile": "development",
+  "real_orders": 0,
+  "stage_evidence": false,
+  "trading_authorized": false
+}
