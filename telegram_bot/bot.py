@@ -28,6 +28,7 @@ COMMANDS = [
     ("suggestions", "Owner-reviewed AI proposals"),
     ("settings", "Read-only effective settings"),
     ("logs", "Sanitized audit metadata"),
+    ("ai", "AI decision journal and adjustments"),
     ("pause", "Pause NEW entries"),
     ("resume", "Confirm entry resume, not live approval"),
     ("kill", "Latch NEW entries off, not flatten"),
@@ -35,6 +36,7 @@ COMMANDS = [
     ("close_all", "Confirm captured bot-owned positions"),
     ("approve", "Approve proposal ONLY, do not apply"),
     ("reject", "Reject a pending proposal"),
+    ("ai_reset", "Revert all AI config adjustments"),
 ]
 
 

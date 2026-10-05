@@ -45,6 +45,9 @@ class RuntimeScheduler:
             "daily_report": self.daily_report,
             "learning": self.learning,
             "backup": self.backup,
+            "ai_learning": self.ai_learning,
+            "ai_config_review": self.ai_config_review,
+            "ai_nightly_review": self.ai_nightly_review,
         }
 
     def control_state(self):
@@ -141,10 +144,15 @@ class RuntimeScheduler:
             if not await self.entries_permitted():
                 break
             window = await r.news.window(symbol)  # Local decision only, NEVER fetch implicitly.
-            signal = await r.signals.evaluate(symbol, reviewer=r.supervisor, news=window)
+            reviewer = r.supervisor
+            if getattr(r, "ai_first", None) is not None and self.settings.ai_first_enabled:
+                reviewer = r.ai_first.reviewer  # AI consulted on EVERY entry; supervisor stays behind it.
+            signal = await r.signals.evaluate(symbol, reviewer=reviewer, news=window)
             if signal.approved and await self.entries_permitted():
                 try:
                     outcome = await r.engine.execute_signal(signal.signal_id)
+                    if getattr(r, "ai_first", None) is not None:
+                        await durable_call(r.ai_first.link_execution, signal.signal_id, outcome)
                     outcomes.append(
                         {
                             "signal_id": signal.signal_id,
@@ -221,10 +229,25 @@ class RuntimeScheduler:
         r = self.resources
         if r.telegram is None:
             return {"state": "no_transport"}
-        return {
+        result = {
             "runtime": await r.notices.drain(r.telegram),
             "news": await OwnerNewsNotifier(r.telegram, r.news.alerts).drain(),
         }
+        if getattr(r, "ai_first", None) is not None:
+            result["ai"] = await r.ai_first.notifier.drain(getattr(r.telegram, "bot", None))
+        return result
+
+    async def ai_learning(self):
+        layer = getattr(self.resources, "ai_first", None)
+        return {"state": "disabled"} if layer is None else await layer.learn_closed_trades()
+
+    async def ai_config_review(self):
+        layer = getattr(self.resources, "ai_first", None)
+        return {"state": "disabled"} if layer is None else await layer.config_review()
+
+    async def ai_nightly_review(self):
+        layer = getattr(self.resources, "ai_first", None)
+        return {"state": "disabled"} if layer is None else await layer.nightly_review()
 
     async def daily_report(self):
         r = self.resources
@@ -265,6 +288,11 @@ class RuntimeScheduler:
             "notifications": cfg.runtime_notifications_seconds,
             "news_advisory": max(300, cfg.news_poll_seconds),
             "position_reviews": cfg.ai_position_review_seconds,
+            **(
+                {"ai_learning": 300, "ai_config_review": 1800}
+                if getattr(self.resources, "ai_first", None) is not None
+                else {}
+            ),
         }.items():
             self.scheduler.add_job(
                 self.run_job, "interval", seconds=seconds, args=(name,), id=name, replace_existing=False
@@ -273,6 +301,11 @@ class RuntimeScheduler:
             ("daily_report", cfg.runtime_report_hour_utc, True),
             ("learning", cfg.runtime_learning_hour_utc, cfg.runtime_learning_enabled),
             ("backup", cfg.runtime_backup_hour_utc, cfg.runtime_backup_enabled),
+            (
+                "ai_nightly_review",
+                (cfg.runtime_report_hour_utc + 1) % 24,
+                getattr(self.resources, "ai_first", None) is not None,
+            ),
         ):
             if enabled:
                 self.scheduler.add_job(

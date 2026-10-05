@@ -296,4 +296,3 @@ async def test_unbound_ai_veto_is_honoured_and_never_overruled_by_rule_fallback(
     assert not result.approved and not secondary.requests
     with execution.database.session() as s:
         assert "rule_fallback" not in s.get(Signal, result.signal_id).reason
-

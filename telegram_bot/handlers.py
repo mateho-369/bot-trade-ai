@@ -24,6 +24,7 @@ READS = {
     "suggestions": "suggestions",
     "settings": "settings",
     "logs": "logs",
+    "ai": "ai_journal",
 }
 
 
@@ -77,7 +78,7 @@ def build_router(services):
         except OwnerInterfaceError as error:
             await _reply(message, "Owner request denied: " + error.code)
 
-    @router.message(Command("pause", "resume", "kill", "close", "close_all", "approve", "reject"))
+    @router.message(Command("pause", "resume", "kill", "close", "close_all", "approve", "reject", "ai_reset"))
     async def action_command(message: Message, command: CommandObject, owner_identity):
         try:
             name = command.command.lower()

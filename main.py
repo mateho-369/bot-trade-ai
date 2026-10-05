@@ -48,6 +48,9 @@ def main(argv: list[str] | None = None) -> int:
         database = Database(settings)
         if args.command == "init-db":
             database.initialize()
+            from ai.decision_journal import ensure_journal_tables
+
+            ensure_journal_tables(database)  # Additive AI journal/overlay tables; core schema unchanged.
         migration = {}
         if args.command == "migrate-db":
             from core.migrations import migrate_v1_to_v2

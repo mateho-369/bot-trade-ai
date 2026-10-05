@@ -15,8 +15,18 @@ from core.settings import Settings
 class OpenAIClient:
     name = "openai"
 
-    def __init__(self, settings: Settings, *, transport: httpx.AsyncBaseTransport | None = None):
+    def __init__(
+        self,
+        settings: Settings,
+        *,
+        transport: httpx.AsyncBaseTransport | None = None,
+        model: str | None = None,
+    ):
+        """``model`` overrides OPENAI_MODEL per client (e.g. AI_DEEP_MODEL for nightly reviews)."""
         self.settings = settings
+        self.model = cfg_model = model if model is not None else settings.openai_model
+        if not re.fullmatch(r"[A-Za-z0-9_./:@+-]{1,128}", cfg_model):
+            raise AIUnavailable("invalid_model_identifier")
         self.http = JSONTransport(settings, transport=transport)
 
     @property
@@ -28,7 +38,7 @@ class OpenAIClient:
         if not self.configured:
             raise AIUnavailable("missing_api_key")
         payload = {
-            "model": cfg.openai_model,
+            "model": self.model,
             "messages": messages,
             "temperature": 0,
             "max_tokens": cfg.ai_max_output_tokens,
@@ -47,9 +57,7 @@ class OpenAIClient:
             if not isinstance(choices, list) or len(choices) != 1 or not isinstance(model, str):
                 raise ValueError
             # Alias or its dated resolution only; never accept an arbitrary different model.
-            if model != cfg.openai_model and not re.fullmatch(
-                re.escape(cfg.openai_model) + r"-\d{4}-\d{2}-\d{2}", model
-            ):
+            if model != self.model and not re.fullmatch(re.escape(self.model) + r"-\d{4}-\d{2}-\d{2}", model):
                 raise ValueError
             choice = choices[0]
             if choice.get("finish_reason") != "stop" or choice.get("index") != 0:
@@ -73,8 +81,15 @@ class OpenAIClient:
         """Provider JSON enforcement. Local strict decoding/bindings run regardless of this mode."""
         if self.settings.openai_response_format != "json_schema_strict":
             return {"type": "json_object"}
+        from ai.ai_first_schemas import schema_name
         from ai.schemas import REPLY_CLASSES, strict_output_schema
 
+        reviewed = schema_name(schema)  # AI-first contracts are already strict, reviewed schemas.
+        if reviewed is not None:
+            return {
+                "type": "json_schema",
+                "json_schema": {"name": f"reflex_ai_first_{reviewed}_v1", "strict": True, "schema": schema},
+            }
         purpose = next(
             (name for name, cls in REPLY_CLASSES.items() if cls.model_json_schema() == schema), None
         )

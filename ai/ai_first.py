@@ -1,0 +1,181 @@
+"""Composition of the AI-FIRST layer for one runtime (explicit, no module globals).
+
+``AIFirstLayer`` wires: DecisionJournal, AIConfigAdjuster, AIOwnerNotifier, PerformanceTracker,
+MarketAwarenessEngine, AIBrain (Groq via the OpenAI-compatible client), AIFirstReviewer (entries),
+AdaptiveTrailing (lock-first) and LearningLoop. The scheduler calls its jobs:
+
+* ``reviewer``               – EntryReviewer used by SignalEngine.evaluate (every signal interval)
+* ``trailing``               – lock-first layer inside PositionManager (every position interval)
+* ``learn_closed_trades``    – learning loop for newly closed trades (every 5 minutes)
+* ``config_review``          – AI config suggestions + owner-decision sync (every 30 minutes)
+* ``nightly_review``         – deep model review (daily)
+* ``notifier.drain``         – owner Telegram notifications
+
+Constructing the layer performs no provider request and no broker write.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime, time
+from zoneinfo import ZoneInfo
+
+from sqlalchemy import func, select
+
+from ai.ai_brain import AIBrain
+from ai.ai_first_reviewer import AIFirstReviewer
+from ai.config_adjuster import AIConfigAdjuster
+from ai.decision_journal import AIDecisionJournal, DecisionJournal
+from ai.learning_loop import LearningLoop
+from ai.market_awareness import MarketAwarenessEngine, PerformanceTracker
+from core.models import Trade
+from telegram_bot.ai_notifications import AIOwnerNotifier
+from trading.ai_adaptive_trailing import AdaptiveTrailing
+from trading.types import BrokerError, ResultStatus, RiskViolation
+
+EXECUTED = frozenset({ResultStatus.FILLED.value, ResultStatus.PARTIAL.value, ResultStatus.ACCEPTED.value})
+
+
+class AIFirstLayer:
+    def __init__(self, database, settings, broker, engine, supervisor, *, brain=None, provider=None):
+        clock = broker.clock
+        self.database, self.settings, self.engine, self.clock = database, settings, engine, clock
+        self.journal = DecisionJournal(database, clock)
+        self.notifier = AIOwnerNotifier(settings, secrets=database.secrets)
+        self.adjuster = AIConfigAdjuster(
+            database,
+            settings,
+            clock,
+            suggestions=getattr(supervisor, "suggestions", None),
+            notifier=self.notifier,
+        )
+        self.performance = PerformanceTracker(database, clock)
+        self.awareness = MarketAwarenessEngine(
+            broker, settings, clock, performance=self.performance, overlay=self.adjuster, journal=self.journal
+        )
+        common = {"journal": self.journal, "adjuster": self.adjuster, "notifier": self.notifier}
+        if brain is not None:
+            self.brain = brain
+        elif provider is not None:
+            self.brain = AIBrain(settings, clock, provider=provider, deep_provider=provider, **common)
+        else:
+            self.brain = AIBrain.from_settings(settings, clock, **common)
+        self.reviewer = AIFirstReviewer(
+            self.brain,
+            self.awareness,
+            settings,
+            engine.profile,
+            clock,
+            inner=supervisor,
+            trades_today=self.trades_today,
+            account_key=engine.account_key,
+        )
+        self.trailing = AdaptiveTrailing(
+            engine,
+            brain=self.brain,
+            journal=self.journal,
+            adjuster=self.adjuster,
+            awareness=self.awareness,
+            notifier=self.notifier,
+        )
+        self.learning = LearningLoop(
+            database, settings, clock, self.journal, brain=self.brain, adjuster=self.adjuster
+        )
+
+    # -- facts ----------------------------------------------------------------------------------
+    def trades_today(self) -> int:
+        zone = ZoneInfo(self.settings.trading_day_timezone)
+        local = self.clock.now().astimezone(zone)
+        start = datetime.combine(local.date(), time(0), tzinfo=zone)
+        with self.database.session() as session:
+            return int(
+                session.scalar(
+                    select(func.count())
+                    .select_from(Trade)
+                    .where(Trade.account_key == self.engine.account_key, Trade.open_time >= start)
+                )
+                or 0
+            )
+
+    # -- jobs -----------------------------------------------------------------------------------
+    def link_execution(self, signal_id: int, outcome) -> None:
+        status = outcome.status.value if outcome is not None else "no_effect"
+        self.journal.link_signal(
+            signal_id,
+            executed=status in EXECUTED,
+            position_id=getattr(outcome, "position_identifier", None),
+            final_action=f"execution_{status}",
+        )
+
+    async def learn_closed_trades(self, *, limit: int = 5) -> dict:
+        synced = self.adjuster.sync_owner_decisions()  # Owner /approve reaches the overlay within 5 min.
+        with self.database.session() as session:
+            reviewed = set(
+                session.scalars(
+                    select(AIDecisionJournal.position_id).where(
+                        AIDecisionJournal.kind == "lesson", AIDecisionJournal.position_id.is_not(None)
+                    )
+                ).all()
+            )
+            candidates = [
+                trade_id
+                for trade_id, position_id in session.execute(
+                    select(Trade.id, Trade.position_identifier)
+                    .where(Trade.account_key == self.engine.account_key, Trade.close_time.is_not(None))
+                    .order_by(Trade.close_time.desc())
+                    .limit(50)
+                )
+                if position_id is not None and position_id not in reviewed
+            ][:limit]
+        reports = []
+        for trade_id in candidates:
+            report = await self.learning.on_trade_closed(trade_id)
+            reports.append({"trade_id": trade_id, "source": report.source, "lessons": list(report.lessons)})
+        return {"state": "reviewed", "trades": reports, "synced": synced}
+
+    async def config_review(self) -> dict:
+        synced = self.adjuster.sync_owner_decisions()
+        if not self.settings.symbols:
+            return {"state": "no_symbols", "synced": synced}
+        try:
+            snapshot = await self.awareness.snapshot(
+                self.settings.symbols[0], account_key=self.engine.account_key
+            )
+        except (BrokerError, RiskViolation, ValueError, KeyError, TypeError):
+            return {"state": "market_unavailable", "synced": synced}
+        reply, model = await self.brain.review_config(snapshot)
+        if reply is None:
+            return {"state": "ai_unavailable", "synced": synced, "mode": self.brain.mode}
+        results = self.adjuster.apply_suggestion(reply)
+        self.journal.record(
+            kind="config",
+            source="ai",
+            action="config_review",
+            reason=reply.reason,
+            confidence=reply.confidence,
+            model=model,
+            symbol=snapshot.symbol,
+            input_summary=snapshot.summary(),
+            adjustments={r.parameter: {"status": r.status, "class": r.classification} for r in results},
+            executed=any(r.status == "applied" for r in results),
+            final_action="pause_advisory" if reply.pause_recommended else "adjustments_processed",
+        )
+        return {
+            "state": "reviewed",
+            "synced": synced,
+            "results": [(r.parameter, r.status, r.classification) for r in results],
+            "pause_recommended": reply.pause_recommended,
+        }
+
+    async def nightly_review(self) -> dict:
+        if not self.settings.symbols:
+            return {"state": "no_symbols"}
+        try:
+            snapshot = await self.awareness.snapshot(
+                self.settings.symbols[0], account_key=self.engine.account_key
+            )
+        except (BrokerError, RiskViolation, ValueError, KeyError, TypeError):
+            return {"state": "market_unavailable"}
+        return await self.learning.deep_review(snapshot)
+
+    async def close(self) -> None:
+        await self.brain.close()

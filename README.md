@@ -25,7 +25,21 @@ cent accounts (USC/EUC)**, **dynamic multi-symbol discovery** (broker suffixes, 
 per-instrument spread caps via `python -m scripts.resolve_symbols`), plus a reproducible
 `docs/RELEASE_15_MANIFEST.json` (see `docs/PART_15_NOTES.md`). 3-day paper test runbook:
 `docs/THREE_DAY_PAPER_TEST.md`.
-**2,683 tests pass with no file skipped** (Part 14 recorded 2,528).
+**AI-FIRST upgrade**: the Groq AI (`qwen/qwen3.8-27b` for fast decisions,
+`openai/gpt-oss-120b` for nightly deep review) is consulted before every entry and after every
+profit lock. The pieces:
+- a market awareness engine
+- strict JSON decisions with a confidence threshold
+- a technical-score fallback and a 3-failure circuit breaker
+- a decision journal
+- a bounded config adjuster: minor changes auto-apply, majors need `/approve`, `/ai_reset` reverts
+- a learning loop
+- Telegram AI notifications and `/ai`, plus the Mini App **AI** tab
+- **lock-first AI-adaptive trailing**: the mechanical 30/60/90 lock always comes first, then the AI
+  may hold, close, tighten or extend, never loosen
+
+Details: `docs/AI_FIRST_ARCHITECTURE.md` and `docs/TRAILING_AI_DESIGN.md`.
+**2,762 tests pass with no file skipped** (Part 15 recorded 2,683; Part 14 2,528).
 Lint/compile and the offline smokes pass.
 Actual Linux scope and remaining native/provenance limits are in `docs/VALIDATION.md`.
 See `docs/VALIDATION.md` for executed checks and limitations.
@@ -59,6 +73,17 @@ not damaged source hashes; the historical Part 10 manifest recorded the correcti
 `PART_09_NOTES.md` covers auth/API/TLS/owner actions, `PART_08_NOTES.md` news,
 `PART_07_NOTES.md` AI/learning, `PART_06_NOTES.md` causal signals and `MIGRATIONS.md`
 preserved state. Current `.env.example` and ordinary files are authoritative.
+
+## AI-FIRST quick test (mock broker / paper engine, offline)
+
+```
+python -m pytest -q tests/test_ai_first.py tests/test_ai_first_runtime.py tests/test_ai_adaptive_trailing.py
+python -m scripts.smoke_ai_first                  # scripted AI: entry, config policy, 30→hold→60→close_now
+python -m scripts.smoke_ai_first --provider rule  # AI outage: rule mode, circuit, mechanical trailing
+```
+
+No broker connection and no real order. The optional `--provider groq` makes a real Groq request
+using `OPENAI_API_KEY` from the environment, still on the mock broker.
 
 ## Read-only offline readiness (no connection/deployment/trading permission)
 

@@ -301,6 +301,20 @@ class Settings(BaseSettings):
     auto_reduce_risk: bool = False
     auto_adapt_strategy_weights: bool = False
     max_strategy_weight_step: Decimal = Field(default=Decimal("0.02"), gt=0, le=Decimal("0.02"))
+    # AI-FIRST brain (ai/ai_brain.py). Every entry/position decision is journalled; the brain only
+    # ever ADDS a veto or REDUCES risk. It never bypasses news/risk/stage/owner/kill gates.
+    ai_first_enabled: bool = True
+    # Deep (nightly/learning) reviews use a separate model on the same OpenAI-compatible endpoint.
+    ai_deep_model: str = "openai/gpt-oss-120b"
+    ai_decision_cache_seconds: int = Field(default=90, ge=0, le=120)
+    ai_queue_min_interval_ms: int = Field(default=250, ge=0, le=5000)
+    # Lock-first AI trailing: the mechanical 30/60/90 lock is ALWAYS sent first; the AI may then only
+    # hold, close early, tighten or (with ALLOW_TP_EXTENSION) extend TP. Slow/invalid AI => mechanical.
+    ai_adaptive_trailing_enabled: bool = True
+    ai_trailing_timeout_seconds: float = Field(default=2.0, ge=0.5, le=5.0)
+    # Minor AI config adjustments (risk +/-0.1, target +/-$1) inside hard bounds apply to the bounded
+    # runtime overlay automatically; everything else needs owner approval via Telegram/Mini App.
+    ai_config_auto_apply_minor: bool = True
 
     news_api_key: SecretStr = SecretStr("")
     finnhub_api_key: SecretStr = SecretStr("")
@@ -696,7 +710,7 @@ class Settings(BaseSettings):
             parsed = urlparse(url)
             if parsed.query or parsed.params or parsed.port is not None and not 1 <= parsed.port <= 65535:
                 raise ValueError("AI endpoint queries/params or invalid ports are forbidden")
-        for model in (self.ollama_model, self.openai_model):
+        for model in (self.ollama_model, self.openai_model, self.ai_deep_model):
             if not re.fullmatch(r"[A-Za-z0-9_./:@+-]{1,128}", model):
                 raise ValueError("invalid configured AI model identifier")
         if self.model_max_dataset_rows < self.model_min_labelled_trades:
@@ -924,6 +938,10 @@ class Settings(BaseSettings):
             "ai_rule_fallback_min_score": self.ai_rule_fallback_min_score,
             "ai_rule_fallback_allow_live": self.ai_rule_fallback_allow_live,
             "openai_response_format": self.openai_response_format,
+            "ai_first_enabled": self.ai_first_enabled,
+            "ai_adaptive_trailing_enabled": self.ai_adaptive_trailing_enabled,
+            "ai_deep_model": self.ai_deep_model,
+            "ai_config_auto_apply_minor": self.ai_config_auto_apply_minor,
             "model_filter_enabled": self.model_filter_enabled,
             "model_algorithm": self.model_algorithm,
             "config_fingerprint": self.safety_fingerprint(),

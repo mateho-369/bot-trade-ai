@@ -200,6 +200,8 @@ class RuntimeLifecycle:
                 await asyncio.sleep(1)
             await r.news.close()
             await r.supervisor.close()
+            if getattr(r, "ai_first", None) is not None:
+                await r.ai_first.close()
             if r.telegram is not None:
                 await r.telegram.close()
             await durable_call(r.notices.enqueue, "stopped", dedup=self.health.identity)

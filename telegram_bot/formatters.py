@@ -3,15 +3,17 @@
 HELP = """MT5 AI ReflexBot · owner only
 /status /dashboard — stored observations, not broker polls
 /positions /trades /signals /news /suggestions /settings /logs
+/ai — AI decision journal (decisions, trailing, lessons, adjustments)
 /pause — stop NEW entries; protective logic continues
 /kill — latch NEW entries off; does not flatten
 /resume — fresh single-use confirmation, not live approval
 /close TICKET POSITION_IDENTIFIER — exact bot-owned capture
 /close_all — confirm captured owned positions, pause entries
 /approve SUGGESTION_ID — approve ONLY, never apply or trade
-/reject SUGGESTION_ID — one-way decision
+/reject SUGGESTION_ID — one-way decision (also rejects major AI config changes)
+/ai_reset — revert every AI config adjustment to your settings
 
-No order/open/live/risk-escalation/reset/withdrawal commands.
+No order/open/live/risk-escalation/withdrawal commands.
 Reopen expired Mini App sessions from this private owner bot.
 A pause/kill cannot recall an already submitted SDK write."""
 
@@ -64,8 +66,25 @@ def render(section, result):
             )
         elif section == "logs":
             lines.append(f"{row['time']} {row['source']} · {row['action']}")
+        elif section == "ai_journal":
+            where = row.get("symbol") or ""
+            if row.get("threshold"):
+                where += f" lock {row['threshold']}%"
+            confidence = "-" if row.get("confidence") is None else f"{row['confidence']:.0f}"
+            outcome = f" · result {row['outcome_usd']} USD" if row.get("outcome_usd") else ""
+            lines.append(
+                f"#{row['id']} {row['kind']} {where} · {row['action']} ({confidence}) via {row['source']}\n"
+                f"→ {row.get('final_action') or row.get('rejection_reason') or 'recorded'}{outcome}\n"
+                f"{row['reason'][:160]}"
+            )
     if len(lines) == 1:
         lines.append("No stored records. Unknown is not zero or clearance.")
+    if section == "ai_journal" and result.get("summary"):
+        summary = result["summary"]
+        lines.append(
+            f"AI answers {summary.get('ai_answers', 0)} · rule fallbacks {summary.get('rule_fallbacks', 0)}"
+            " · AI advises; risk engine, pause and kill stay authoritative."
+        )
     if section == "news":
         lines.append(
             "Coverage: " + result.get("coverage", {}).get("status", "unknown") + "; not entry permission."

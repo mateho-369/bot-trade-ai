@@ -156,6 +156,7 @@ class OwnerServices:
             "suggestions": self.views.suggestions,
             "settings": self.views.settings_view,
             "logs": self.views.logs,
+            "ai_journal": self.views.ai_journal,
         }
         if section not in functions:
             raise OwnerInterfaceError("section_not_found", 404)
@@ -433,6 +434,16 @@ class OwnerServices:
                 if action == "pause"
                 else "Kill latch set; no new entries. This does not flatten the broker account.",
                 "effect_applied": True,
+            }
+        if action == "ai_reset":
+            from ai.config_adjuster import revert_all
+
+            reverted = await durable_call(revert_all, self.database, self.clock, owner_id=actor.owner_id)
+            return {
+                "status": "completed",
+                "reverted_ai_adjustments": reverted,
+                "effect_applied": True,
+                "message": "AI config overlay reverted to owner settings; no trade was opened or closed.",
             }
         if self.closing:
             raise OwnerInterfaceError("runtime_stopping", 503)

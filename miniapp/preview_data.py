@@ -337,6 +337,62 @@ FIXTURE = {
         ]
     },
 }
+FIXTURE["ai_journal"] = {
+    "items": [
+        {
+            "id": 3,
+            "time": "2026-10-03T12:01:00+00:00",
+            "kind": "trailing",
+            "symbol": "EURUSD",
+            "position_id": 1001,
+            "threshold": 30,
+            "source": "ai",
+            "model": "fixture",
+            "action": "hold_to_60",
+            "confidence": 82,
+            "reason": "Fixture: lock 30% placed first; trend intact on M15/H1.",
+            "executed": True,
+            "final_action": "hold_to_60",
+            "rejection_reason": None,
+            "outcome_usd": None,
+        },
+        {
+            "id": 2,
+            "time": "2026-10-03T11:58:00+00:00",
+            "kind": "entry",
+            "symbol": "XAUUSD",
+            "position_id": None,
+            "threshold": None,
+            "source": "rule_fallback",
+            "model": "technical-score-v1",
+            "action": "wait",
+            "confidence": 64,
+            "reason": "Fixture: AI unavailable; technical score below the fallback minimum.",
+            "executed": False,
+            "final_action": "vetoed",
+            "rejection_reason": "confidence_below_threshold,ai_wait",
+            "outcome_usd": None,
+        },
+    ],
+    "adjustments": [
+        {
+            "id": 1,
+            "time": "2026-10-03T11:40:00+00:00",
+            "parameter": "risk_percent_per_trade",
+            "value": "0.4",
+            "classification": "minor",
+            "status": "applied",
+            "suggestion_id": None,
+        }
+    ],
+    "summary": {
+        "decisions": 2,
+        "ai_answers": 1,
+        "rule_fallbacks": 1,
+        "entries_approved": 0,
+        "with_outcome": 0,
+    },
+}
 FIXTURE["dashboard"]["positions"] = FIXTURE["positions"]["items"]
 
 

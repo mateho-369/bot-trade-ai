@@ -28,6 +28,21 @@ from trading.types import (
 )
 
 
+class LockRegressionError(RiskViolation):
+    """An attempt to remove or loosen an existing protective lock. Always a hard error."""
+
+
+def assert_never_loosens(side: Side, current_sl: Decimal, proposed_sl: Decimal) -> None:
+    """Monotonic lock invariant shared by the mechanical and AI-adaptive paths.
+
+    A BUY stop may only move UP, a SELL stop only DOWN. Removing a stop (0) is loosening too.
+    """
+    if not isinstance(proposed_sl, Decimal) or not proposed_sl.is_finite():
+        raise LockRegressionError("proposed stop must be a finite Decimal")
+    if current_sl > ZERO and (proposed_sl <= ZERO or side.sign * (proposed_sl - current_sl) < ZERO):
+        raise LockRegressionError("an existing profit lock can never be removed or loosened")
+
+
 @dataclass(frozen=True, slots=True)
 class TrailingPlan:
     sl: Decimal
@@ -245,3 +260,45 @@ class TrailingEngine:
             return price
         except BrokerError:
             return None
+
+    async def tighten(self, position: Position, owned: OwnedTrade, *, fraction: Decimal) -> Decimal | None:
+        """A strictly TIGHTER legal stop: move ``fraction`` of the way from the current SL to price.
+
+        Used only by the AI ``tighten_lock`` decision AFTER the mechanical lock. Returns None when the
+        move is not strictly tighter, not legal (stops/freeze level) or would not keep the verified
+        net lock. Never loosens: the result always passes ``assert_never_loosens``.
+        """
+        if not isinstance(fraction, Decimal) or not ZERO < fraction < 1 or position.sl <= ZERO:
+            return None
+        meta, tick = (
+            await self.broker.get_symbol_info(position.symbol),
+            await self.broker.get_tick(position.symbol),
+        )
+        tick.fresh(self.clock, self.settings.max_tick_age_seconds)
+        price = tick.exit(position.side)
+        gap = position.side.sign * (price - position.sl)
+        if gap <= ZERO:
+            return None
+        sl = snap(
+            position.sl + position.side.sign * gap * fraction, meta.tick_size, up=position.side == Side.SELL
+        )
+        if position.side.sign * (sl - position.sl) <= ZERO:
+            return None
+        assert_never_loosens(position.side, position.sl, sl)
+        command = BrokerCommand(
+            Operation.PROTECT,
+            "4" * 64,
+            self.clock.now(),
+            ticket=position.ticket,
+            position_identifier=position.identifier,
+            sl=sl,
+        )
+        try:
+            protection_prices(command, position, meta, tick, self.settings)
+        except BrokerError:
+            return None
+        if owned.lock_level > 0:
+            goal = owned.target_usd * Decimal(str(owned.lock_level)) / 100
+            if await self.net_at_price(position, owned, sl) < goal:
+                return None
+        return sl

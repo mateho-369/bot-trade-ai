@@ -38,3 +38,14 @@ async def reject(request: Request, body: RejectSuggestionRequest, identity: Acto
     return await services(request).action(
         identity, "reject_suggestion", {"suggestion_id": body.suggestion_id}, body.request_id
     )
+
+
+@router.get("/ai_journal")
+async def ai_journal(
+    request: Request,
+    identity: Actor,
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    offset: Annotated[int, Query(ge=0, le=10000)] = 0,
+):
+    """AI Decision Journal: every AI/rule decision, trailing lock-first action and lesson."""
+    return await services(request).read(identity, "ai_journal", limit=limit, offset=offset)
