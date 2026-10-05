@@ -176,6 +176,7 @@ mt5_ai_reflex_bot/
 │   ├── RELEASE_15_MANIFEST.json
 │   ├── REPLAY_AUDIT.md
 │   ├── TARGET_TREE.txt
+│   ├── THREE_DAY_PAPER_TEST.md
 │   ├── VALIDATION.md
 │   ├── VALIDATION_PART_10.md
 │   ├── VALIDATION_PART_11.md
@@ -244,6 +245,7 @@ mt5_ai_reflex_bot/
 │   ├── preflight.py
 │   ├── preview_owner_ui.py
 │   ├── readiness.py
+│   ├── resolve_symbols.py
 │   ├── run_bot_hidden.vbs
 │   ├── run_mt5_background.vbs
 │   ├── run_owner_interface.py
@@ -333,6 +335,7 @@ mt5_ai_reflex_bot/
 │   ├── test_bundle_audit_runner.py
 │   ├── test_bundle_audit_semantics.py
 │   ├── test_candle_patterns.py
+│   ├── test_cent_account.py
 │   ├── test_database.py
 │   ├── test_execution.py
 │   ├── test_feature_engine.py
@@ -421,6 +424,7 @@ mt5_ai_reflex_bot/
 │   ├── test_strategies.py
 │   ├── test_strategy_optimizer.py
 │   ├── test_strategy_router.py
+│   ├── test_symbol_resolver.py
 │   ├── test_telegram_initdata.py
 │   ├── test_telegram_notifications.py
 │   ├── test_telegram_owner_commands.py
@@ -452,6 +456,7 @@ mt5_ai_reflex_bot/
 │   ├── stage_gate.py
 │   ├── state_store.py
 │   ├── symbol_manager.py
+│   ├── symbol_resolver.py
 │   ├── trade_logger.py
 │   ├── trailing_engine.py
 │   └── types.py

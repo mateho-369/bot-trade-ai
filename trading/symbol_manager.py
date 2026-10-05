@@ -3,7 +3,8 @@
 from dataclasses import dataclass
 
 from core.settings import Settings
-from trading.types import MarketData, SymbolInfo, UnsupportedSymbol
+from trading.symbol_resolver import broker_suffix
+from trading.types import BrokerError, MarketData, SymbolInfo, UnsupportedSymbol
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,14 +38,27 @@ class SymbolManager:
                     native,
                     info,
                     self.settings.symbol_news_currencies.get(logical, ()),
-                    self.settings.symbol_spread_limits.get(
-                        logical,
-                        self.settings.symbol_spread_limits.get(native, self.settings.max_spread_points),
-                    ),
+                    self.settings.spread_limit_points(logical, native),
                 )
             except UnsupportedSymbol:
                 errors[logical] = "unavailable/invalid broker metadata; configure an explicit alias"
+        if errors:
+            await self._suggest(errors)
         self._symbols, self._errors = found, errors
+
+    async def _suggest(self, errors: dict[str, str]) -> None:
+        """Name the broker's suffixed symbol instead of silently re-binding it at runtime."""
+        try:
+            available = await self.market.get_symbols()
+        except BrokerError:
+            return
+        for logical in errors:
+            names = sorted(n for n in available if broker_suffix(logical, n) not in (None, ""))
+            if names:
+                errors[logical] = (
+                    f"broker names this symbol {', '.join(names[:3])}; run "
+                    "python -m scripts.resolve_symbols --env-file .env --write, then restart PAUSED"
+                )
 
     def enabled(self) -> tuple[ManagedSymbol, ...]:
         return tuple(self._symbols.values())

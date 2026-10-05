@@ -64,7 +64,10 @@ def configure_logging(settings: Settings) -> None:
         handler.setFormatter(formatter)
         root.addHandler(handler)
     # HTTP DEBUG logging can contain complete request data; never enable it.
-    for name in ("httpx", "httpcore", "sqlalchemy.engine", "aiogram.event"):
+    # APScheduler logs two INFO lines per job run (every 5-30 s): on a multi-day
+    # run that noise would rotate real events out of the bounded log. Job errors
+    # and missed runs are still WARNING/ERROR.
+    for name in ("httpx", "httpcore", "sqlalchemy.engine", "aiogram.event", "apscheduler"):
         logging.getLogger(name).setLevel(logging.WARNING)
 
 

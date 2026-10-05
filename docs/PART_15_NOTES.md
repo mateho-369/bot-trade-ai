@@ -74,7 +74,62 @@ Unchanged: risk sizing and caps, SL requirement, 30/60/90 profit locks, no marti
 owner pause/kill/resume, stage gates, durable idempotency, `DenyAllWrites`, startup PAUSED.
 Position reviews/TP extension still require a real AI review (no fallback extension).
 
-## 4. Release manifest
+## 4. Cent accounts (Exness USC / EUC)
+
+`trading/currency.py` treats the exact codes `USC` and `EUC` as fixed 1/100
+denominations of USD and EUR (`USDC`, `USDT` or anything else is never relabelled).
+
+| Concern | How it works |
+|---|---|
+| Detect the account | MT5 `account_info().currency`. The client refuses (quarantine) if it differs from `ACCOUNT_CURRENCY`, and the risk engine vetoes `account_currency`. `scripts.resolve_symbols` reports the terminal currency and proposes `ACCOUNT_CURRENCY=USC`. |
+| Risk % of balance | Budgets are `risk_capital × %` in account currency: 0.5% of 100,000 USC = 500 USC = $5, identical to 0.5% of $1,000. |
+| Lot size | Native `order_calc_profit` (mock: the same converter) values a candidate lot in USC, so the broker's cent tick value is used and the lot equals the USD-equivalent account's (0.02, never 2.00). |
+| USD amounts | Target, commission and swap convert ×100 exactly: a $2 target = 200 USC; `TrailingEngine.lock_targets_account()` shows the 30/60/90 tiers as 60/120/180 USC. |
+| Snapshot FX | USC→USD asset/liability rate exactly 0.01; EUC uses `ACCOUNT_TO_USD_SYMBOLS_JSON={"EUR": "EURUSDc"}` then ÷100. |
+| Paper/mock | With `ACCOUNT_CURRENCY=USC`, `PAPER_INITIAL_BALANCE` is in cents (100000 = $1,000). |
+
+`tests/test_cent_account.py` runs the whole open → reconcile → 30/60/90 trailing flow on a
+100,000 USC account and on a $1,000 account and asserts identical lots, stops and USD
+locks, with every account-currency amount exactly ×100.
+
+## 5. Dynamic multi-symbol support
+
+`SYMBOLS` accepts any logical names (FX, metals, crypto, indices). `trading/symbol_resolver.py`
+plus the read-only CLI `python -m scripts.resolve_symbols --env-file .env [--write]`:
+
+- read the broker's symbol list and Market Watch (`symbols_get`, `visible`), never orders;
+- detect suffixes: `XAUUSD.`, `XAUUSDm`, `XAUUSDc`, `EURUSD.raw`, `US30-ecn`, `_i`, `#`, `pro`
+  (an UPPERCASE tail such as `ETHUSDT` is a different instrument, never a suffix);
+- break ties by the account's own convention (suffix vote), Market Watch visibility or
+  `--suffix`; anything still ambiguous stays disabled with a named reason;
+- report contract size, tick size, tick value (profit/loss), point, digits, lot min/max/step,
+  stops level, current and typical spread for every symbol;
+- propose a per-instrument spread cap = median broker candle spread × 2 (never below
+  `MAX_SPREAD_POINTS`), so BTCUSD (thousands of points) is not blocked forever while FX
+  keeps a tight cap; the spread/ATR filter still applies;
+- infer news exposure from fiat base/profit currencies (XAUUSD → USD, USDJPY → USD, JPY);
+- find the FX route for a non-USD parent (EUC → `EURUSDc`).
+
+`--write` updates ONLY `SYMBOL_ALIASES_JSON`, `SYMBOL_SPREAD_LIMITS_JSON`,
+`SYMBOL_NEWS_CURRENCIES_JSON`, `ACCOUNT_TO_USD_SYMBOLS_JSON` and (on mismatch)
+`ACCOUNT_CURRENCY`, atomically, keeping the file mode, with no backup copy of secrets, and
+restores the original if the result fails Settings validation. Owner entries always win.
+
+Why persist instead of re-binding at runtime: aliases are part of the safety fingerprint
+shared by the runtime, the watchdog (health `config_hash`), backups and bound approvals. A
+silent in-memory rename would make the watchdog treat the bot as foreign. At startup the
+`SymbolManager` therefore never re-binds; if `XAUUSD` is missing but `XAUUSDm` exists it
+disables the symbol and names the fix. All spread-cap lookups now share
+`Settings.spread_limit_points(logical, native)`.
+
+## 6. Multi-day operation
+
+APScheduler INFO lines (two per job run, every 5-30 s) are now suppressed to WARNING, so a
+multi-day run keeps real events inside the bounded rotating log (5 MiB × 6 files).
+Verified in a throwaway copy: discovery → `check-config` → `init-db` → `app.bot` and
+`watchdog.py` start PAUSED, health `ready`, `scripts.stop_runtime` exits cleanly (exit 0).
+
+## 7. Release manifest
 
 `docs/RELEASE_15_MANIFEST.json` is produced by the reviewed builder
 `python -B -m scripts.build_release_manifest --pytest-passed N` and checked by the unchanged
@@ -84,7 +139,7 @@ Any later byte edit requires review, a full test run and a rebuilt manifest.
 `.gitattributes` (`* -text`) prevents Git CRLF conversion on Windows, which would otherwise
 change file bytes and fail the integrity check after `git clone`.
 
-## 5. Compatibility
+## 8. Compatibility
 
 New code/config changes the code and safety fingerprints. Existing pending approvals and
 config-bound paper checkpoints from Part 14 are intentionally invalid; keep the matched

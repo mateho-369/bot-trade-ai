@@ -68,6 +68,9 @@ def build(root: Path, *, pytest_passed: int, manifest_name: str = MANIFEST) -> d
             "groq_openai_compatible_strict_json_schema",
             "ai_rule_based_fallback",
             "release_manifest_builder",
+            "cent_account_usc_euc",
+            "dynamic_symbol_discovery",
+            "bounded_multi_day_logging",
         ],
         "evidence": (
             "strictly offline synthetic/software/scripted-HTTP fixture regression; NOT genuine "

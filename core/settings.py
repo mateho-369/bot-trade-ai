@@ -867,6 +867,13 @@ class Settings(BaseSettings):
     def safety_fingerprint(self) -> str:
         return sha256_json(self.safety_snapshot())
 
+    def spread_limit_points(self, logical: str | None, native: str | None = None) -> int:
+        """Per-symbol spread cap: logical override, then native-name override, then global."""
+        for key in (logical, native):
+            if key is not None and key in self.symbol_spread_limits:
+                return self.symbol_spread_limits[key]
+        return self.max_spread_points
+
     def strategy_fingerprint(self) -> str:
         # Stage evidence can span paper/demo/live and different account logins.
         # Owner execution approvals use safety_fingerprint PLUS actual account/session.

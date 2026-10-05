@@ -67,6 +67,21 @@ class TrailingEngine:
         ]
         return sum(ranges[-period:], ZERO) / period
 
+    async def lock_targets_account(self, target_usd: Decimal) -> dict[str, Decimal]:
+        """USD target and 30/60/90 lock goals expressed in ACCOUNT currency.
+
+        Locks are solved in net USD; on a cent account (USC) a $2 target is
+        exactly 200 USC and the tiers are 60/120/180 USC. Owner-facing only.
+        """
+        if not isinstance(target_usd, Decimal) or not target_usd.is_finite() or target_usd <= ZERO:
+            raise RiskViolation("lock target must be a positive Decimal")
+        currency = self.calculator.currency
+        result = {"target": await currency.usd_to_account(target_usd)}
+        for _, lock in self.settings.trailing_levels:
+            goal = target_usd * Decimal(str(lock)) / 100
+            result[f"lock_{lock:g}"] = await currency.usd_to_account(goal)
+        return result
+
     async def _offset(self, position: Position, owned: OwnedTrade) -> Decimal:
         if (
             owned.identifier != position.identifier

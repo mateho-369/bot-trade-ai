@@ -20,9 +20,12 @@ and actual ML approval/execution revalidation**.
 Completed research runs additionally publish an exact input/output/private-ledger
 bundle closure for bounded read-only metric/decision/SQLite-memory audits.
 **Part 15** adds working deployment preflight checks, **Groq (OpenAI-compatible) strict
-JSON-schema mode** and a **rule-based fallback when the AI provider is unavailable**, plus a
-reproducible `docs/RELEASE_15_MANIFEST.json` (see `docs/PART_15_NOTES.md`).
-**2,644 tests pass with no file skipped** (Part 14 recorded 2,528).
+JSON-schema mode**, a **rule-based fallback when the AI provider is unavailable**, **Exness
+cent accounts (USC/EUC)**, **dynamic multi-symbol discovery** (broker suffixes, contract specs,
+per-instrument spread caps via `python -m scripts.resolve_symbols`), plus a reproducible
+`docs/RELEASE_15_MANIFEST.json` (see `docs/PART_15_NOTES.md`). 3-day paper test runbook:
+`docs/THREE_DAY_PAPER_TEST.md`.
+**2,683 tests pass with no file skipped** (Part 14 recorded 2,528).
 Lint/compile and the offline smokes pass.
 Actual Linux scope and remaining native/provenance limits are in `docs/VALIDATION.md`.
 See `docs/VALIDATION.md` for executed checks and limitations.

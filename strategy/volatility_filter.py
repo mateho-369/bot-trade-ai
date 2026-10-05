@@ -49,9 +49,7 @@ class VolatilityFilter:
                 reasons.append("climax_or_gap_bar")
             if (tick.ask - tick.bid) / atr > cfg.volatility_max_spread_atr_ratio:
                 reasons.append("spread_too_large_for_atr")
-        limit = cfg.symbol_spread_limits.get(
-            features.logical_symbol, cfg.symbol_spread_limits.get(features.symbol, cfg.max_spread_points)
-        )
+        limit = cfg.spread_limit_points(features.logical_symbol, features.symbol)
         if tick.spread_points(features.info) > limit:
             reasons.append("excessive_spread")
         if tick.bid % features.info.tick_size != 0 or tick.ask % features.info.tick_size != 0:
