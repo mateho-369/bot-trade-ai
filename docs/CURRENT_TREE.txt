@@ -1,4 +1,4 @@
-Cumulative Parts 1–15 + AI-FIRST upgrade — actual packaged tree (0.13.0 / schema 2).
+Cumulative Parts 1–15 + AI-FIRST upgrade + AI fallback mode, AI-dynamic limits, Alert Center and Windows launchers — actual packaged tree (0.13.0 / schema 2).
 All planned installments implemented as ordinary source; external/native qualification remains unexecuted.
 No .env, DB, WAL, log, checkpoint, credentials, environments or caches included.
 
@@ -37,6 +37,7 @@ mt5_ai_reflex_bot/
 │   └── walk_forward.py
 ├── app/
 │   ├── __init__.py
+│   ├── alerts.py
 │   ├── async_tools.py
 │   ├── backups.py
 │   ├── bot.py
@@ -129,6 +130,7 @@ mt5_ai_reflex_bot/
 │   │       ├── smoke_readiness.txt
 │   │       └── smoke_replay_model.txt
 │   ├── AI_FIRST_ARCHITECTURE.md
+│   ├── ALERTS.md
 │   ├── ARCHITECTURE.md
 │   ├── BACKTESTING.md
 │   ├── BACKTEST_CONTRACT_SCHEMAS.json
@@ -197,6 +199,7 @@ mt5_ai_reflex_bot/
 │   ├── api/
 │   │   ├── __init__.py
 │   │   ├── ai.py
+│   │   ├── alerts.py
 │   │   ├── control.py
 │   │   ├── dashboard.py
 │   │   ├── dependencies.py
@@ -328,6 +331,7 @@ mt5_ai_reflex_bot/
 │   ├── test_ai_adaptive_trailing.py
 │   ├── test_ai_clients.py
 │   ├── test_ai_diagnostics.py
+│   ├── test_ai_fallback_mode.py
 │   ├── test_ai_first.py
 │   ├── test_ai_first_runtime.py
 │   ├── test_ai_json.py
@@ -335,6 +339,7 @@ mt5_ai_reflex_bot/
 │   ├── test_ai_settings.py
 │   ├── test_ai_suggestions.py
 │   ├── test_ai_supervisor.py
+│   ├── test_alerts.py
 │   ├── test_artifact_atomic_publish.py
 │   ├── test_backtest_cli.py
 │   ├── test_backtest_dataset.py
@@ -452,6 +457,7 @@ mt5_ai_reflex_bot/
 │   ├── .gitkeep
 │   ├── __init__.py
 │   ├── ai_adaptive_trailing.py
+│   ├── ai_controls.py
 │   ├── authorization.py
 │   ├── candles.py
 │   ├── client_helpers.py
@@ -481,8 +487,11 @@ mt5_ai_reflex_bot/
 ├── .gitignore
 ├── README.md
 ├── config.py
+├── install.bat
 ├── launcher.py
 ├── main.py
 ├── pyproject.toml
 ├── requirements.txt
+├── start.bat
+├── start_demo.bat
 └── watchdog.py

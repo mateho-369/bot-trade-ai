@@ -39,7 +39,19 @@ profit lock. The pieces:
   may hold, close, tighten or extend, never loosen
 
 Details: `docs/AI_FIRST_ARCHITECTURE.md` and `docs/TRAILING_AI_DESIGN.md`.
-**2,762 tests pass with no file skipped** (Part 15 recorded 2,683; Part 14 2,528).
+
+**Owner controls and alerts**:
+- **Configurable AI fallback** (`AI_FALLBACK_MODE`). The default, `BLOCK_ON_AI_FAILURE`, opens no
+  new entry while the AI is unavailable. `TECHNICAL_ONLY` trades only signals whose technical
+  score is at least `AI_RULE_FALLBACK_MIN_SCORE`. Owner-only toggle, audited.
+- **AI-dynamic trade frequency**: the AI adjusts limits inside bounds, under fixed hard caps.
+  Changes above 50 % need owner approval.
+- **Alert Center**: INFO / WARNING / ERROR / CRITICAL alerts to Telegram, with dedup and a rate
+  limit. CRITICAL auto-pauses new entries. Mini App **Alerts** page.
+- **Windows launchers**: `install.bat`, `start.bat`, `start_demo.bat`.
+
+Details: `docs/ALERTS.md` and `docs/AI_FIRST_ARCHITECTURE.md`.
+**2,810 tests pass with no file skipped** (AI-FIRST recorded 2,762; Part 15 2,683; Part 14 2,528).
 Lint/compile and the offline smokes pass.
 Actual Linux scope and remaining native/provenance limits are in `docs/VALIDATION.md`.
 See `docs/VALIDATION.md` for executed checks and limitations.
@@ -78,12 +90,96 @@ preserved state. Current `.env.example` and ordinary files are authoritative.
 
 ```
 python -m pytest -q tests/test_ai_first.py tests/test_ai_first_runtime.py tests/test_ai_adaptive_trailing.py
+python -m pytest -q tests/test_ai_fallback_mode.py tests/test_alerts.py
 python -m scripts.smoke_ai_first                  # scripted AI: entry, config policy, 30→hold→60→close_now
 python -m scripts.smoke_ai_first --provider rule  # AI outage: rule mode, circuit, mechanical trailing
 ```
 
 No broker connection and no real order. The optional `--provider groq` makes a real Groq request
 using `OPENAI_API_KEY` from the environment, still on the mock broker.
+
+## Windows batch files (paper by default; never live)
+
+| File | What it does |
+|---|---|
+| `install.bat` | Creates `.venv` (Python 3.11), installs `requirements.txt`, runs `pip check`, copies `.env.example` to `.env` only if `.env` is missing, then runs `main.py check-config` and `main.py init-db`. Never starts the bot. |
+| `start.bat` | Runs `check-config`, then starts the supervised runtime (`watchdog.py --env-file .env`) in the foreground. The bot always starts **PAUSED**; resume with `/resume` in Telegram. Refuses to start while `data\runtime\operator-stop.json` exists. |
+| `start_demo.bat` | Demo run: MT5 **demo** account data (`MT5_BACKEND=real`), **paper** orders. Asks you to type `YES` (exact, upper case). Refuses unless `.env` has `LIVE_TRADING=false`, `PAPER_TRADING=true` and `START_PAUSED=true`. Starts the MT5 terminal minimized via `scripts\run_mt5_background.vbs`, then the watchdog. |
+
+All three files keep CRLF line endings (the repo stores bytes as-is). They are hashed by
+`verify_release`. None of them enables live trading or sends a real order.
+
+## AI fallback mode and dynamic limits
+
+| `.env` key | Default | Meaning |
+|---|---|---|
+| `AI_PROVIDER` | `openai_compatible` | Groq through its OpenAI-compatible API (`groq` and `openai` are accepted aliases) |
+| `OPENAI_MODEL_FAST` / `OPENAI_MODEL_DEEP` | `qwen/qwen3.8-27b` / `openai/gpt-oss-120b` | entry and trailing decisions / nightly deep review |
+| `AI_TIMEOUT_SECONDS` / `AI_MAX_RETRIES` | `10` / `3` | per-request timeout; retries on transient failures before falling back |
+| `AI_QUEUE_MIN_INTERVAL_MS` | `500` | minimum spacing between AI requests |
+| `AI_FALLBACK_MODE` | `BLOCK_ON_AI_FAILURE` | what happens when the AI is down: `BLOCK_ON_AI_FAILURE` (no entries) or `TECHNICAL_ONLY` |
+| `AI_RULE_FALLBACK_MIN_SCORE` | `80` | technical score needed in `TECHNICAL_ONLY` mode |
+| `AI_DYNAMIC_LIMITS_ENABLED` | `true` | allow AI-adjusted frequency, positions, risk and target inside the bounds below |
+
+Owner switch at runtime:
+- Telegram: `/ai_fallback_status`, `/ai_fallback_block`, `/ai_fallback_technical`.
+- Mini App: **Settings → AI fallback mode**.
+
+The owner's choice is stored in the database and audited (`owner.ai_fallback_mode_changed`). It
+overrides `.env` until changed again. It never touches the kill switch, risk checks, the news
+block or the safety gates. In both modes the bot keeps running and protective position management
+continues. **With no AI key and the default BLOCK mode, no new trade is opened.**
+
+| Limit | AI may set | Owner default | Hard cap (never exceeded) |
+|---|---|---|---|
+| Trades per day | 6–20 | 12 | 25 |
+| Open positions | 1–5 | 3 | 5 |
+| Risk per trade | 0.1–1.0 % | 0.5 % | 1.0 % |
+| Daily profit target | $1–20 | $5 | — |
+| Daily loss / drawdown | — | 3 % / 10 % | auto-pause latch, never AI-adjustable |
+
+Adjustment rules:
+- Trending markets (high ADX) may increase the limits; choppy markets or high news risk decrease
+  them.
+- A change of more than 50 % waits for `/approve`.
+- Every change is logged with its reason (`config_history`, `ai_decisions.log`), and the
+  nightly AI review sends the owner a summary of them.
+- If the AI status is stale or unavailable, the owner defaults apply.
+- Telegram: `/limits` shows the limits and `/ai_reset` returns to the defaults. The Mini App
+  **Settings** page has a **Reset AI to defaults** button.
+
+## Alert Center
+
+Levels:
+- `INFO`: logged and stored only.
+- `WARNING`: sent to Telegram.
+- `ERROR`: sent to Telegram immediately.
+- `CRITICAL`: sent immediately and **auto-pauses new entries**. Resume with the normal gated
+  `/resume`; open positions keep their protection.
+
+Covered events:
+- MT5 connection lost or reconnected
+- AI failure, with the active fallback mode
+- order rejection and SL/TP modification failure
+- kill switch, daily loss and drawdown latches
+- watchdog restart, stall and restart budget
+- database write failure
+- a risk check blocking a trade
+- any WARNING+ log line from the bot
+
+Delivery rules:
+- The same alert within 5 minutes is grouped (`Repeated: xN`).
+- At most 5 Telegram messages per 5 minutes.
+- CRITICAL is never grouped or rate-limited.
+
+Telegram: `/alerts`, `/alerts critical|error|warning|info`, `/ack_all`, `/ack ID`.
+Mini App: the **Alerts** page shows the last 100 alerts, with filter, colours, acknowledge and a
+30 s refresh. API: `GET /api/alerts`, `POST /api/alerts/ack`.
+
+Log files in `data/logs/`: `bot.log`, `errors.log` (WARNING+) and `ai_decisions.log`. Each is
+5 MB × 6 files.
+
+Schema and full event map: `docs/ALERTS.md`.
 
 ## Read-only offline readiness (no connection/deployment/trading permission)
 
@@ -214,7 +310,9 @@ never promises atomic account flatten. Proposal approval != application.
 - `MT5_BACKEND=mock`, `START_PAUSED=true`; no broker credentials required.
 - 0.5% maximum nominal stop risk/entry; initial live cap 0.1%.
 - 1.5% total nominal open risk; 3% daily equity-loss cap; 10% peak drawdown cap.
-- 12 maximum entries/day, 3 simultaneous positions, one position per symbol.
+- 12 maximum entries/day, 3 simultaneous positions, one position per symbol (owner defaults;
+  the AI may adjust 6–20 / 1–5 inside hard caps of 25 / 5 / 1.0 % risk).
+- `AI_FALLBACK_MODE=BLOCK_ON_AI_FAILURE`: no new entries while the AI is unavailable.
 - Six entries/day is a target only. No forced entries, martingale or averaging.
 - SL and promotion gates cannot be disabled. Every restart is paused.
 - Default $5 profit objective must pass net reward/risk >=1.1 and costs.

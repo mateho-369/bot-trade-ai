@@ -97,6 +97,8 @@ class ConfigSuggestion(_Strict):
     target_profit_per_trade: float | None
     max_daily_trades: int | None
     max_spread_points: int | None
+    # AI-dynamic open-position limit 1..5 (layer-2 hard cap 5). Default None keeps older replies valid.
+    max_open_positions: int | None = None
     skip_trailing_levels: Annotated[list[Literal[30, 60, 90]], Field(max_length=3)]
     strategy_weights: StrategyWeights | None
     symbols_to_trade: (
@@ -178,6 +180,7 @@ STRICT_SCHEMAS: dict[str, dict] = {
             "target_profit_per_trade": {"type": ["number", "null"]},
             "max_daily_trades": {"type": ["integer", "null"]},
             "max_spread_points": {"type": ["integer", "null"]},
+            "max_open_positions": {"type": ["integer", "null"]},
             "skip_trailing_levels": {"type": "array", "items": {"type": "integer", "enum": [30, 60, 90]}},
             "strategy_weights": {
                 "anyOf": [
@@ -200,6 +203,7 @@ STRICT_SCHEMAS: dict[str, dict] = {
             "target_profit_per_trade",
             "max_daily_trades",
             "max_spread_points",
+            "max_open_positions",
             "skip_trailing_levels",
             "strategy_weights",
             "symbols_to_trade",

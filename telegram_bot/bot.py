@@ -37,6 +37,12 @@ COMMANDS = [
     ("approve", "Approve proposal ONLY, do not apply"),
     ("reject", "Reject a pending proposal"),
     ("ai_reset", "Revert all AI config adjustments"),
+    ("ai_fallback_status", "AI fallback mode and AI health"),
+    ("ai_fallback_block", "AI down: block new entries (default)"),
+    ("ai_fallback_technical", "AI down: technical score fallback"),
+    ("limits", "AI-dynamic limits and hard caps"),
+    ("alerts", "Recent alerts (add: critical)"),
+    ("ack_all", "Acknowledge all alerts"),
 ]
 
 

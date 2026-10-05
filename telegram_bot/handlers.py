@@ -25,7 +25,10 @@ READS = {
     "settings": "settings",
     "logs": "logs",
     "ai": "ai_journal",
+    "ai_fallback_status": "ai_fallback",
+    "limits": "limits",
 }
+ALERT_LEVELS = {"critical": "CRITICAL", "error": "ERROR", "warning": "WARNING", "info": "INFO"}
 
 
 def _request_id(event):
@@ -78,7 +81,33 @@ def build_router(services):
         except OwnerInterfaceError as error:
             await _reply(message, "Owner request denied: " + error.code)
 
-    @router.message(Command("pause", "resume", "kill", "close", "close_all", "approve", "reject", "ai_reset"))
+    @router.message(Command("alerts"))
+    async def alerts_command(message: Message, command: CommandObject, owner_identity):
+        try:
+            argument = (command.args or "").strip().lower()
+            if argument and argument not in ALERT_LEVELS:
+                raise OwnerInterfaceError("invalid_command_arguments", 422)
+            result = await services.read(owner_identity, "alerts", limit=10, level=ALERT_LEVELS.get(argument))
+            await _reply(message, render("alerts", result), owner_menu(services.settings))
+        except OwnerInterfaceError as error:
+            await _reply(message, "Owner request denied: " + error.code)
+
+    @router.message(
+        Command(
+            "pause",
+            "resume",
+            "kill",
+            "close",
+            "close_all",
+            "approve",
+            "reject",
+            "ai_reset",
+            "ai_fallback_block",
+            "ai_fallback_technical",
+            "ack_all",
+            "ack",
+        )
+    )
     async def action_command(message: Message, command: CommandObject, owner_identity):
         try:
             name = command.command.lower()
@@ -86,6 +115,8 @@ def build_router(services):
                 "close": "close_position",
                 "approve": "approve_suggestion",
                 "reject": "reject_suggestion",
+                "ack_all": "ack_alerts",
+                "ack": "ack_alert",
             }.get(name, name)
             parameters = {}
             if name == "close":
@@ -93,6 +124,8 @@ def build_router(services):
                 parameters = {"ticket": ticket, "position_identifier": identifier}
             elif name in {"approve", "reject"}:
                 parameters = {"suggestion_id": _ids(command.args, 1)[0]}
+            elif name == "ack":
+                parameters = {"alert_id": _ids(command.args, 1)[0]}
             elif command.args:
                 raise OwnerInterfaceError("invalid_command_arguments", 422)
             result = await services.action(owner_identity, action, parameters, _request_id(message))

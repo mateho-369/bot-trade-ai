@@ -200,16 +200,39 @@ async def run(provider_name: str) -> dict:
                     await brain.decide(snapshot)
                 checks["circuit_open_rule_mode"] = brain.mode == "rule"
                 checks["owner_notified_of_outage"] = any("rule" in t.lower() for t in notifier.outbox)
+                # Owner AI_FALLBACK_MODE: BLOCK (default) => no entry; TECHNICAL_ONLY => technical score.
+                blocked = await brain.decide(snapshot)
+                checks["block_mode_blocks_entries"] = (
+                    blocked.source == "ai_blocked" and not blocked.executable
+                )
+                brain.fallback_mode = lambda: "TECHNICAL_ONLY"
+                technical = await brain.decide(snapshot)
+                checks["technical_mode_uses_score"] = technical.source == "rule_fallback"
+                report["fallback_modes"] = {
+                    "BLOCK_ON_AI_FAILURE": [blocked.source, blocked.executable],
+                    "TECHNICAL_ONLY": [technical.source, technical.decision.action],
+                }
+                brain.fallback_mode = lambda: "BLOCK_ON_AI_FAILURE"
 
-            # 2. Config adjuster: minor auto, major pending, forbidden rejected --------------------
+            # 2. Config adjuster: <=50 % auto, >50 % owner approval, increase needs a strong trend,
+            #    forbidden rejected --------------------------------------------------------------
             minor = adjuster.propose("risk_percent_per_trade", 0.4, reason="smoke minor")
-            major = adjuster.propose("max_daily_trades", 5, reason="smoke major")
-            forbidden = adjuster.propose("max_open_positions", 10, reason="smoke forbidden")
-            report["config"] = [(r.parameter, r.classification, r.status) for r in (minor, major, forbidden)]
-            checks["config_policy"] = (minor.status, major.status, forbidden.status) == (
-                "applied",
-                "pending",
-                "rejected",
+            major = adjuster.propose("max_open_positions", 1, reason="smoke major (3 -> 1)")
+            choppy = adjuster.propose(
+                "max_daily_trades", 16, reason="smoke increase", context={"regime": "ranging"}
+            )
+            forbidden = adjuster.propose("kill_switch", 0, reason="smoke forbidden")
+            results = (minor, major, choppy, forbidden)
+            report["config"] = [(r.parameter, r.classification, r.status, r.reason[:40]) for r in results]
+            checks["config_policy"] = (
+                tuple(r.status for r in results)
+                == (
+                    "applied",
+                    "pending",
+                    "rejected",
+                    "rejected",
+                )
+                and choppy.reason == "increase_requires_strong_trend"
             )
 
             # 3. Lock-first trailing on a PAPER position ------------------------------------------

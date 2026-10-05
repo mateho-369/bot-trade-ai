@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr
 
@@ -40,3 +40,11 @@ class RejectSuggestionRequest(DirectRequest):
 
 class CancelRequest(StrictRequest):
     confirmation_token: ConfirmationToken
+
+
+class AckAlertsRequest(DirectRequest):
+    alert_id: PositiveID | None = None  # None = acknowledge every unacknowledged alert.
+
+
+class FallbackModeRequest(DirectRequest):
+    mode: Literal["BLOCK_ON_AI_FAILURE", "TECHNICAL_ONLY"]

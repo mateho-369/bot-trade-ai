@@ -12,6 +12,12 @@ HELP = """MT5 AI ReflexBot · owner only
 /approve SUGGESTION_ID — approve ONLY, never apply or trade
 /reject SUGGESTION_ID — one-way decision (also rejects major AI config changes)
 /ai_reset — revert every AI config adjustment to your settings
+/ai_fallback_status — AI fallback mode, AI health, dynamic limits
+/ai_fallback_block — AI down => NO new entries (default, safest)
+/ai_fallback_technical — AI down => technical score >= threshold only
+/limits — AI-dynamic limits, owner defaults and hard caps
+/alerts [critical|error|warning|info] — last alerts (Alert Center)
+/ack_all — acknowledge every alert · /ack ALERT_ID — one alert
 
 No order/open/live/risk-escalation/withdrawal commands.
 Reopen expired Mini App sessions from this private owner bot.
@@ -44,6 +50,48 @@ def render(section, result):
             + "\n"
             + result["policy"]
         )
+    if section == "ai_fallback":
+        ai, limits = result.get("ai", {}), result.get("limits", {})
+        return (
+            f"AI fallback mode: {result['mode']}\n"
+            f"{result.get('description', '')}\n"
+            f"AI status: {'available' if ai.get('available') else 'UNAVAILABLE'} "
+            f"({ai.get('mode', 'unknown')})\n"
+            f"Active limits ({limits.get('source', '?')}): {limits.get('max_daily_trades')} trades/day, "
+            f"{limits.get('max_open_positions')} positions, risk {limits.get('risk_percent')}%, "
+            f"target {limits.get('target_usd')}\n"
+            "Switch: /ai_fallback_block or /ai_fallback_technical (owner only, audited).\n"
+            "Kill switch, risk checks and news block are never affected."
+        )[:3600]
+    if section == "limits":
+        eff, caps = result["effective"], result["hard_caps"]
+        overrides = ", ".join(f"{k}={v}" for k, v in result["ai_overrides"].items()) or "none"
+        return (
+            f"Active limits (source {eff['source']}): {eff['max_daily_trades']} trades/day · "
+            f"{eff['max_open_positions']} positions · risk {eff['risk_percent']}% · "
+            f"target {eff['target_usd']}\n"
+            f"AI overrides: {overrides}\n"
+            "AI bounds: " + ", ".join(f"{k} {lo}-{hi}" for k, (lo, hi) in result["ai_bounds"].items()) + "\n"
+            f"Hard caps (AI can never exceed): {caps['max_daily_trades']} trades/day · "
+            f"{caps['max_open_positions']} positions · risk {caps['risk_percent_per_trade']}% · "
+            f"daily loss {caps['max_daily_loss_percent']}% · drawdown {caps['max_drawdown_percent']}%\n"
+            "Changes >50% need your approval (/suggestions). /ai_reset restores defaults."
+        )[:3600]
+    if section == "alerts":
+        icons = {"INFO": "ℹ️", "WARNING": "⚠️", "ERROR": "🚨", "CRITICAL": "🛑"}
+        lines = [f"Alerts · unacknowledged: {result.get('unacknowledged', 0)}"]
+        for row in result.get("items", [])[:10]:
+            repeat = f" (x{row['repeat_count']})" if row.get("repeat_count", 1) > 1 else ""
+            ack = "✓" if row.get("acknowledged") else "•"
+            lines.append(
+                f"{ack} #{row['id']} {icons.get(row['level'], '')} {row['level']} {row['timestamp'][:19]}\n"
+                f"{row['component']}: {row['message'][:200]}{repeat}"
+                + (f"\nAction: {row['action'][:120]}" if row.get("action") else "")
+            )
+        if len(lines) == 1:
+            lines.append("No alerts stored.")
+        lines.append("/ack_all to acknowledge all · /ack ID for one.")
+        return "\n\n".join(lines)[:3600]
     lines = ["MT5 AI ReflexBot · " + section + " (stored projection)"]
     for row in result.get("items", [])[:10]:
         if section in {"positions", "trades"}:

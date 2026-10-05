@@ -13,7 +13,16 @@ from typing import Annotated, Literal, Self
 from urllib.parse import parse_qsl, urlparse
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, StrictBool, field_validator, model_validator
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    SecretStr,
+    StrictBool,
+    field_validator,
+    model_validator,
+)
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 from core.security import SENSITIVE_KEY, sha256_json
@@ -22,6 +31,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 TIMEFRAME_MINUTES = {"M1": 1, "M5": 5, "M15": 15, "M30": 30, "H1": 60, "H4": 240, "D1": 1440}
 Timeframe = Literal["M1", "M5", "M15", "M30", "H1", "H4", "D1"]
 Provider = Literal["ollama", "openai", "disabled"]
+# Owner-controlled behaviour when the AI provider cannot answer an ENTRY decision.
+AIFallbackMode = Literal["BLOCK_ON_AI_FAILURE", "TECHNICAL_ONLY"]
+PROVIDER_ALIASES = {"openai_compatible": "openai", "groq": "openai"}
 
 
 class FrozenDict(dict):
@@ -278,7 +290,10 @@ class Settings(BaseSettings):
     allow_remote_ollama: bool = False
     openai_api_key: SecretStr = SecretStr("")
     openai_base_url: str = "https://api.openai.com/v1"
-    openai_model: str = "gpt-4.1-mini"
+    # OPENAI_MODEL_FAST / OPENAI_MODEL_DEEP are accepted aliases (Groq master-directive names).
+    openai_model: str = Field(
+        default="gpt-4.1-mini", validation_alias=AliasChoices("openai_model", "openai_model_fast")
+    )
     # json_object = provider JSON-syntax mode; json_schema_strict = provider constrained decoding
     # (Groq openai/gpt-oss-20b, openai/gpt-oss-120b, qwen/qwen3.8-27b). Local strict validation ALWAYS runs.
     openai_response_format: Literal["json_object", "json_schema_strict"] = "json_object"
@@ -298,6 +313,16 @@ class Settings(BaseSettings):
     ai_rule_fallback_enabled: bool = True
     ai_rule_fallback_min_score: float = Field(default=80, ge=50, le=100)
     ai_rule_fallback_allow_live: bool = False
+    # BLOCK_ON_AI_FAILURE (default, safest): an AI outage blocks NEW entries; mechanical trailing and
+    # every protective path continue. TECHNICAL_ONLY: technical score >= AI_RULE_FALLBACK_MIN_SCORE may
+    # trade (risk/news/stage/owner/kill gates still apply). The owner can switch it at runtime via
+    # /ai_fallback_block, /ai_fallback_technical or the Mini App (stored in the DB, audited).
+    ai_fallback_mode: AIFallbackMode = "BLOCK_ON_AI_FAILURE"
+    # Entry decisions only: transient provider failures are retried inside AI_TIMEOUT_SECONDS.
+    ai_max_retries: int = Field(default=3, ge=0, le=5)
+    # Layer-1 AI-dynamic limits (max trades/day 6-20, open positions 1-5, risk 0.1-1.0 %, target $1-20)
+    # inside layer-2 hard caps (25 trades, 5 positions, 1.0 % risk). Off => static owner settings.
+    ai_dynamic_limits_enabled: bool = True
     auto_reduce_risk: bool = False
     auto_adapt_strategy_weights: bool = False
     max_strategy_weight_step: Decimal = Field(default=Decimal("0.02"), gt=0, le=Decimal("0.02"))
@@ -305,9 +330,11 @@ class Settings(BaseSettings):
     # ever ADDS a veto or REDUCES risk. It never bypasses news/risk/stage/owner/kill gates.
     ai_first_enabled: bool = True
     # Deep (nightly/learning) reviews use a separate model on the same OpenAI-compatible endpoint.
-    ai_deep_model: str = "openai/gpt-oss-120b"
+    ai_deep_model: str = Field(
+        default="openai/gpt-oss-120b", validation_alias=AliasChoices("ai_deep_model", "openai_model_deep")
+    )
     ai_decision_cache_seconds: int = Field(default=90, ge=0, le=120)
-    ai_queue_min_interval_ms: int = Field(default=250, ge=0, le=5000)
+    ai_queue_min_interval_ms: int = Field(default=500, ge=0, le=5000)
     # Lock-first AI trailing: the mechanical 30/60/90 lock is ALWAYS sent first; the AI may then only
     # hold, close early, tighten or (with ALLOW_TP_EXTENSION) extend TP. Slow/invalid AI => mechanical.
     ai_adaptive_trailing_enabled: bool = True
@@ -548,6 +575,19 @@ class Settings(BaseSettings):
         if isinstance(value, bool):
             raise ValueError("boolean is not a strategy parameter")
         return value
+
+    @field_validator("ai_provider", "ai_fallback_provider", mode="before")
+    @classmethod
+    def provider_alias(cls, value):
+        if isinstance(value, str):
+            text = value.strip().lower()
+            return PROVIDER_ALIASES.get(text, text)
+        return value
+
+    @field_validator("ai_fallback_mode", mode="before")
+    @classmethod
+    def fallback_mode_name(cls, value):
+        return value.strip().upper() if isinstance(value, str) else value
 
     @field_validator("trailing_levels", mode="before")
     @classmethod
@@ -937,6 +977,9 @@ class Settings(BaseSettings):
             "ai_rule_fallback_enabled": self.ai_rule_fallback_enabled,
             "ai_rule_fallback_min_score": self.ai_rule_fallback_min_score,
             "ai_rule_fallback_allow_live": self.ai_rule_fallback_allow_live,
+            "ai_fallback_mode": self.ai_fallback_mode,
+            "ai_max_retries": self.ai_max_retries,
+            "ai_dynamic_limits_enabled": self.ai_dynamic_limits_enabled,
             "openai_response_format": self.openai_response_format,
             "ai_first_enabled": self.ai_first_enabled,
             "ai_adaptive_trailing_enabled": self.ai_adaptive_trailing_enabled,

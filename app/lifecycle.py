@@ -37,6 +37,7 @@ class RuntimeLifecycle:
         self.factory = factory
         self.lock = ProcessLock(settings.resolve_path(settings.runtime_lock_file))
         self.database = self.resources = self.scheduler = self.api = self.api_socket = None
+        self.alert_handler = None  # app.alerts.AlertLogHandler while the runtime is up.
         self.api_task = self.poll_task = self.monitor_task = None
         self.stop_event = asyncio.Event()
         self._closed = False
@@ -69,6 +70,10 @@ class RuntimeLifecycle:
         self.resources = await durable_call(self.factory, self.settings, self.database)
         r = self.resources
         self.health.resources = r
+        if getattr(r, "alerts", None) is not None:
+            from app.alerts import attach_log_handler
+
+            self.alert_handler = attach_log_handler(r.alerts)
         self.monitor_task = asyncio.create_task(self.monitor(), name="runtime-health")
         await r.engine.initialize()  # Claims PAUSED, restores ledger and reconciles.
         await r.signals.initialize()
@@ -202,6 +207,15 @@ class RuntimeLifecycle:
             await r.supervisor.close()
             if getattr(r, "ai_first", None) is not None:
                 await r.ai_first.close()
+            if getattr(r, "alerts", None) is not None:
+                from app.alerts import detach_log_handler
+
+                detach_log_handler(getattr(self, "alert_handler", None))
+                self.alert_handler = None
+                try:  # Last delivery of pending alerts (bounded; never blocks shutdown on errors).
+                    await asyncio.wait_for(r.alerts.flush(getattr(r.telegram, "bot", None)), timeout=10)
+                except Exception:
+                    LOG.warning("Final alert flush incomplete")
             if r.telegram is not None:
                 await r.telegram.close()
             await durable_call(r.notices.enqueue, "stopped", dedup=self.health.identity)

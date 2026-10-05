@@ -457,7 +457,7 @@ class OwnerReadModel:
                 for r in rows
             ]
             adjustments = []
-            if "ai_config_overlay" in tables:
+            if "config_history" in tables:
                 adjustments = [
                     {
                         "id": a.id,
@@ -469,6 +469,12 @@ class OwnerReadModel:
                         "classification": self.text(a.classification, 8),
                         "status": self.text(a.status, 12),
                         "suggestion_id": a.suggestion_id,
+                        "previous": self.text(
+                            a.previous if not isinstance(a.previous, (list, dict)) else str(a.previous), 120
+                        )
+                        if a.previous is not None
+                        else None,
+                        "reason": self.text(a.reason, 200),
                     }
                     for a in session.scalars(
                         select(AIConfigOverlay).order_by(AIConfigOverlay.id.desc()).limit(20)
@@ -479,6 +485,7 @@ class OwnerReadModel:
             "decisions": len(items),
             "ai_answers": sum(i["source"] in {"ai", "cache"} for i in items),
             "rule_fallbacks": sum(i["source"] == "rule_fallback" for i in items),
+            "ai_blocked": sum(i["source"] == "ai_blocked" for i in items),
             "entries_approved": sum(i["final_action"] == "approved_to_risk_engine" for i in decided),
             "with_outcome": sum(i["outcome_usd"] is not None for i in items),
         }

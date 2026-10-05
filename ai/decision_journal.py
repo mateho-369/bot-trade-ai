@@ -7,7 +7,10 @@ existing table. Rows are bounded and sanitized (no secrets, no raw provider bodi
 Tables
 ------
 ``ai_decision_journal``  one row per consultation (entry, position, trailing, config, lesson)
-``ai_config_overlay``    bounded runtime config adjustments (see ai.config_adjuster)
+``config_history``       every bounded AI config adjustment + owner decision (ai.config_adjuster)
+
+The CURRENT AI-dynamic limits live in ``dynamic_config`` and owner AI toggles in
+``ai_owner_settings`` (both ``trading.ai_controls``; created here too).
 """
 
 from __future__ import annotations
@@ -18,7 +21,20 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import JSON, BigInteger, Boolean, Float, Integer, String, Text, case, func, select
+from sqlalchemy import (
+    JSON,
+    BigInteger,
+    Boolean,
+    Float,
+    Integer,
+    String,
+    Text,
+    case,
+    func,
+    inspect,
+    select,
+    text,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from core.database import Database
@@ -27,7 +43,7 @@ from core.security import canonical_json, sanitize_data, sanitize_text, sha256_j
 from trading.types import Clock
 
 KINDS = frozenset({"entry", "position", "trailing", "config", "lesson", "deep_review"})
-SOURCES = frozenset({"ai", "cache", "rule_fallback", "mechanical", "deterministic", "owner"})
+SOURCES = frozenset({"ai", "cache", "rule_fallback", "ai_blocked", "mechanical", "deterministic", "owner"})
 MAX_SUMMARY_BYTES = 8192
 
 
@@ -61,7 +77,9 @@ class AIDecisionJournal(JournalBase):
 
 
 class AIConfigOverlay(JournalBase):
-    __tablename__ = "ai_config_overlay"
+    """One row per AI config adjustment (history). Applied rows form the active overlay."""
+
+    __tablename__ = "config_history"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     time: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, index=True)
     parameter: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
@@ -77,7 +95,14 @@ class AIConfigOverlay(JournalBase):
 
 def ensure_journal_tables(database: Database) -> None:
     """Idempotent, additive. Safe on a fresh or an existing init-db database."""
+    from trading.ai_controls import ensure_control_tables
+
+    names = set(inspect(database.engine).get_table_names())
+    if "ai_config_overlay" in names and "config_history" not in names:
+        with database.engine.begin() as connection:  # Pre-rename AI-first databases keep history.
+            connection.execute(text("ALTER TABLE ai_config_overlay RENAME TO config_history"))
     JournalBase.metadata.create_all(database.engine, checkfirst=True)
+    ensure_control_tables(database)
 
 
 def _text(value: object, limit: int) -> str:

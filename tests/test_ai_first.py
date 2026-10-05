@@ -26,6 +26,7 @@ from core.database import Database
 from core.models import AuditLog, Trade
 from tests.risk_helpers import MOMENT, OWNER, config, make_engine, open_one
 from tests.signal_helpers import make_signal_runtime, news
+from trading.ai_controls import publish_ai_status
 from trading.mock_mt5 import MockMT5Client
 from trading.risk_types import RuntimeProfile
 from trading.types import ManualClock, Side, SourceKind, TradingDisabled
@@ -85,7 +86,7 @@ class Notes:
 
 @pytest.fixture
 async def market(tmp_path):
-    settings = config(tmp_path, symbols=("EURUSD", "XAUUSD"), ai_queue_min_interval_ms=0)
+    settings = config(tmp_path, symbols=("EURUSD", "XAUUSD"), ai_queue_min_interval_ms=0, ai_max_retries=0)
     database = Database(settings)
     database.initialize()
     clock = ManualClock(MOMENT)
@@ -292,14 +293,14 @@ async def test_ai_decision_is_executable_only_at_or_above_threshold(market):
 )
 async def test_ai_failure_falls_back_to_the_technical_score_without_blocking(market, provider):
     settings, database, clock, _ = market
-    settings = settings.model_copy(update={"ai_timeout_seconds": 1})
+    settings = settings.model_copy(update={"ai_timeout_seconds": 1, "ai_fallback_mode": "TECHNICAL_ONLY"})
     snapshot = await snapshot_for(market)
     brain = AIBrain(settings, clock, provider=provider)
     result = await brain.decide(snapshot)
     assert result.source == "rule_fallback" and result.model == "technical-score-v1"
     assert result.failure is not None
     assert result.decision.action == "open_buy" and result.decision.confidence == 85.0
-    assert result.executable  # Outage does not block trading: technical score >= fallback minimum.
+    assert result.executable  # TECHNICAL_ONLY: technical score >= fallback minimum may trade.
 
 
 async def test_rule_fallback_confidence_is_exactly_the_technical_score(market):
@@ -317,7 +318,10 @@ async def test_three_failures_switch_to_rule_mode_and_notify_owner_once(market):
     settings, database, clock, _ = market
     notes, provider = Notes(), Provider("broken")
     brain = AIBrain(
-        settings.model_copy(update={"ai_decision_cache_seconds": 0}), clock, provider=provider, notifier=notes
+        settings.model_copy(update={"ai_decision_cache_seconds": 0, "ai_fallback_mode": "TECHNICAL_ONLY"}),
+        clock,
+        provider=provider,
+        notifier=notes,
     )
     snapshot = await snapshot_for(market)
     for _ in range(5):
@@ -377,10 +381,12 @@ def audit_actions(database):
 
 
 def test_minor_risk_change_auto_applies_inside_owner_ceiling(market):
-    settings, database, *_ = market
+    settings, database, clock, _ = market
     layer = adjuster(market)
     result = layer.propose("risk_percent_per_trade", 0.4, reason="volatility rising")
-    assert (result.classification, result.status) == ("minor", "applied")
+    assert (result.classification, result.status) == ("minor", "applied")  # 20 % of the default.
+    assert layer.effective()["risk_percent_per_trade"] == settings.effective_risk_percent  # AI not seen.
+    publish_ai_status(database, clock, mode="ai")
     assert layer.effective()["risk_percent_per_trade"] == Decimal("0.4")
     assert "ai.config_auto_applied" in audit_actions(database)
 
@@ -390,15 +396,18 @@ def test_major_changes_wait_for_owner_and_effective_values_never_exceed_owner_ca
     profile = RuntimeProfile.current(settings, SourceKind.SYNTHETIC)
     store = SuggestionStore(database, settings, clock, profile)
     layer = adjuster(market, suggestions=store)
-    result = layer.propose("max_daily_trades", 5, reason="ranging market")
+    publish_ai_status(database, clock, mode="ai")
+    result = layer.propose("max_open_positions", 1, reason="choppy market")  # 3 -> 1 = 67 % change.
     assert (result.classification, result.status) == ("major", "pending") and result.suggestion_id
-    assert "max_daily_trades" not in layer.effective()
+    assert layer.effective()["max_open_positions"] == settings.max_open_positions
     store.decide(result.suggestion_id, owner_id=OWNER, approve=True)
     assert layer.sync_owner_decisions() == 1
-    assert layer.effective()["max_daily_trades"] == 5
-    raised = layer.propose("risk_percent_per_trade", 1.0, reason="strong trend")
+    assert layer.effective()["max_open_positions"] == 1
+    trend = {"regime": "trending", "news_risk": "low"}
+    raised = layer.propose("risk_percent_per_trade", 1.0, reason="strong trend", context=trend)
+    assert (raised.classification, raised.status) == ("major", "pending")  # +100 % needs the owner.
     layer.decide(raised.overlay_id, owner_id=OWNER, approve=True)
-    assert layer.effective()["risk_percent_per_trade"] == settings.effective_risk_percent  # Owner cap wins.
+    assert layer.effective()["risk_percent_per_trade"] == Decimal("1.0")  # Layer-2 hard cap is 1.0 %.
     with pytest.raises(TradingDisabled):
         store.apply(result.suggestion_id, owner_id=OWNER)  # Never a stopped settings projection.
 
@@ -409,7 +418,10 @@ def test_major_changes_wait_for_owner_and_effective_values_never_exceed_owner_ca
         ("risk_percent_per_trade", 1.5),
         ("risk_percent_per_trade", 0.05),
         ("target_profit_per_trade", 25),
-        ("max_daily_trades", 16),
+        ("max_daily_trades", 21),
+        ("max_daily_trades", 5),
+        ("max_open_positions", 6),
+        ("max_open_positions", 0),
         ("max_spread_points", 60),
         ("skip_trailing_levels", [45]),
         ("symbols_to_trade", ["BTCUSD"]),
@@ -425,7 +437,13 @@ def test_out_of_bounds_suggestions_are_rejected_and_audited(market, parameter, v
 
 @pytest.mark.parametrize(
     "parameter",
-    ["max_open_positions", "kill_switch", "live_trading", "max_daily_loss_percent", "max_drawdown_percent"],
+    [
+        "kill_switch",
+        "live_trading",
+        "max_daily_loss_percent",
+        "max_drawdown_percent",
+        "max_risk_percent_per_trade",
+    ],
 )
 def test_hard_limit_parameters_can_never_be_changed_by_ai(market, parameter):
     settings, database, *_ = market
@@ -433,14 +451,15 @@ def test_hard_limit_parameters_can_never_be_changed_by_ai(market, parameter):
     result = layer.propose(parameter, 10, reason="AI wants more")
     assert result.classification == "forbidden" and result.status == "rejected"
     assert "ai.config_forbidden" in audit_actions(database)
-    assert layer.effective()["max_open_positions"] <= ABSOLUTE_MAX_OPEN_POSITIONS == 3
+    assert layer.effective()["max_open_positions"] <= ABSOLUTE_MAX_OPEN_POSITIONS == 5
 
 
 def test_hard_limit_table_matches_the_owner_bounds():
     assert {k: (str(a), str(b)) for k, (a, b) in HARD_LIMITS.items()} == {
         "risk_percent_per_trade": ("0.1", "1.0"),
         "target_profit_per_trade": ("1", "20"),
-        "max_daily_trades": ("3", "15"),
+        "max_daily_trades": ("6", "20"),
+        "max_open_positions": ("1", "5"),
         "max_spread_points": ("10", "50"),
     }
 
@@ -531,7 +550,9 @@ async def test_ai_first_reviewer_valid_wait_is_final_and_never_shopped_to_rules(
 
 
 async def test_ai_first_reviewer_outage_uses_the_canonical_rule_fallback(tmp_path):
-    signals, execution = await make_signal_runtime(tmp_path, ai_queue_min_interval_ms=0)
+    signals, execution = await make_signal_runtime(
+        tmp_path, ai_queue_min_interval_ms=0, ai_fallback_mode="TECHNICAL_ONLY", ai_max_retries=0
+    )
     try:
         proposal = await signals.analyze("EURUSD")
         brain = AIBrain(

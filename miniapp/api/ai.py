@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, Query, Request
 
 from app.owner_identity import OwnerIdentity
 from miniapp.api.dependencies import owner, services
-from miniapp.api.schemas import RejectSuggestionRequest, SuggestionRequest
+from miniapp.api.schemas import DirectRequest, FallbackModeRequest, RejectSuggestionRequest, SuggestionRequest
 
 router = APIRouter(prefix="/api", tags=["proposals"])
 Actor = Annotated[OwnerIdentity, Depends(owner)]
@@ -49,3 +49,28 @@ async def ai_journal(
 ):
     """AI Decision Journal: every AI/rule decision, trailing lock-first action and lesson."""
     return await services(request).read(identity, "ai_journal", limit=limit, offset=offset)
+
+
+@router.get("/ai_fallback")
+async def ai_fallback(request: Request, identity: Actor):
+    """Owner AI_FALLBACK_MODE, AI health and the limits currently enforced."""
+    return await services(request).read(identity, "ai_fallback")
+
+
+@router.post("/ai_fallback")
+async def set_ai_fallback(request: Request, body: FallbackModeRequest, identity: Actor):
+    """Owner-only, audited. Never touches the kill switch, risk checks or the news block."""
+    action = "ai_fallback_block" if body.mode == "BLOCK_ON_AI_FAILURE" else "ai_fallback_technical"
+    return await services(request).action(identity, action, {}, body.request_id)
+
+
+@router.get("/limits")
+async def limits(request: Request, identity: Actor):
+    """AI-dynamic limits (effective), owner defaults, AI bounds and hard caps."""
+    return await services(request).read(identity, "limits")
+
+
+@router.post("/ai_reset")
+async def ai_reset(request: Request, body: DirectRequest, identity: Actor):
+    """Reset every AI adjustment to the owner defaults (audited)."""
+    return await services(request).action(identity, "ai_reset", {}, body.request_id)

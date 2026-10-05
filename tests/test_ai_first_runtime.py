@@ -18,6 +18,7 @@ from tests.owner_helpers import api_client, auth_header, fake_transport, message
 from tests.risk_helpers import OWNER, config
 from tests.runtime_helpers import close_runtime, runtime
 from trading.ai_adaptive_trailing import AdaptiveTrailing, TrailingEvent
+from trading.ai_controls import read_dynamic
 
 
 # -- composition / scheduler -----------------------------------------------------------------------
@@ -117,10 +118,10 @@ async def test_config_adjustment_notification_points_to_owner_approval(tmp_path)
     services = owner_services(tmp_path)
     notifier = AIOwnerNotifier(services.settings)
     adjuster = AIConfigAdjuster(services.database, services.settings, services.clock, notifier=notifier)
-    adjuster.propose("max_daily_trades", 5, reason="ranging")
+    adjuster.propose("max_open_positions", 1, reason="ranging")  # 3 -> 1 is a >50 % change.
     adjuster.propose("risk_percent_per_trade", 0.4, reason="calm")
     texts = list(notifier.outbox)
-    assert any("max_daily_trades" in t and "approv" in t.lower() for t in texts)
+    assert any("max_open_positions" in t and "approv" in t.lower() for t in texts)
     assert any("risk_percent_per_trade" in t and "applied" in t.lower() for t in texts)
 
 
@@ -192,7 +193,8 @@ async def test_owner_ai_reset_reverts_every_ai_adjustment_and_is_audited(tmp_pat
     services = owner_services(tmp_path)
     adjuster = AIConfigAdjuster(services.database, services.settings, services.clock)
     adjuster.propose("risk_percent_per_trade", 0.4, reason="calm")
-    adjuster.propose("max_daily_trades", 5, reason="ranging")
+    adjuster.propose("max_daily_trades", 8, reason="ranging")
+    assert set(read_dynamic(services.database)) == {"risk_percent_per_trade", "max_daily_trades"}
     transport, session = fake_transport(services)
     await transport.dispatcher.feed_update(transport.bot, message_update(services, "/ai_reset"))
     replies = [m for name, m in session.calls if name == "SendMessage"]
@@ -202,8 +204,31 @@ async def test_owner_ai_reset_reverts_every_ai_adjustment_and_is_audited(tmp_pat
         actions = set(sql.scalars(select(AuditLog.action)).all())
     assert statuses == {"reverted"} and "owner.ai_config_reset" in actions
     fresh = AIConfigAdjuster(services.database, services.settings, services.clock)
-    assert "risk_percent_per_trade" not in fresh.effective()
+    assert read_dynamic(services.database) == {}  # dynamic_config cleared: owner defaults apply.
+    assert fresh.effective()["risk_percent_per_trade"] == services.settings.effective_risk_percent
     await transport.close()
+
+
+async def test_miniapp_reset_to_defaults_is_owner_only_and_audited(tmp_path):
+    services = owner_services(tmp_path)
+    adjuster = AIConfigAdjuster(services.database, services.settings, services.clock)
+    adjuster.propose("max_daily_trades", 8, reason="ranging")
+    async with api_client(services) as (client, _):
+        denied = await client.post(
+            "/api/ai_reset", json={"request_id": "3" * 8 + "-3333-4333-8333-" + "3" * 12}
+        )
+        assert denied.status_code == 401 and read_dynamic(services.database) == {"max_daily_trades": 8}
+        ok = await client.post(
+            "/api/ai_reset",
+            json={"request_id": "4" * 8 + "-4444-4444-8444-" + "4" * 12},
+            headers=auth_header(services),
+        )
+        assert ok.status_code == 200, ok.text
+        limits = (await client.get("/api/limits", headers=auth_header(services))).json()
+    assert read_dynamic(services.database) == {}
+    assert limits["ai_overrides"] == {} and limits["hard_caps"]["max_daily_trades"] == 25
+    with services.database.session() as sql:
+        assert "owner.ai_config_reset" in set(sql.scalars(select(AuditLog.action)).all())
 
 
 async def test_non_owner_cannot_reset_ai_adjustments(tmp_path):

@@ -6,6 +6,11 @@ reject/WAIT/low confidence is final and is never "shopped" past), AI_PROVIDER=di
 request, unsafe/unknown news, a learning-filter veto, BACKTEST/historical replay, or LIVE unless the
 owner explicitly sets AI_RULE_FALLBACK_ALLOW_LIVE=true.
 
+AI_FALLBACK_MODE (owner-controlled, default BLOCK_ON_AI_FAILURE) is checked here too: in BLOCK mode
+the fallback is out of scope everywhere (review, finalization AND the pre-send recheck), so an AI
+outage opens no new entry. TECHNICAL_ONLY re-enables this deterministic technical review. Callers
+pass the CURRENT effective mode (``trading.ai_controls.fallback_mode``: DB owner override or setting).
+
 The review's confidence is EXACTLY the persisted technical signal score, so finalization and the
 pre-send risk recheck can verify it was not fabricated. It approves only at or above
 AI_RULE_FALLBACK_MIN_SCORE (validated >= AI_CONFIDENCE_THRESHOLD and MIN_SIGNAL_SCORE). It never
@@ -25,10 +30,14 @@ RULE_FALLBACK_PROVIDER = "rule_fallback"
 RULE_FALLBACK_MODEL = "technical-score-v1"
 
 
-def rule_fallback_permitted(settings: Settings, profile: RuntimeProfile) -> bool:
+def rule_fallback_permitted(
+    settings: Settings, profile: RuntimeProfile, *, fallback_mode: str | None = None
+) -> bool:
     """Policy scope only; every ordinary news/risk/owner/stage gate still applies afterwards."""
+    mode = fallback_mode or settings.ai_fallback_mode
     return bool(
-        settings.ai_rule_fallback_enabled
+        mode == "TECHNICAL_ONLY"
+        and settings.ai_rule_fallback_enabled
         and settings.mode != OperatingMode.BACKTEST
         and profile.data_source != SourceKind.HISTORICAL
         and (settings.mode != OperatingMode.LIVE or settings.ai_rule_fallback_allow_live)
@@ -36,11 +45,16 @@ def rule_fallback_permitted(settings: Settings, profile: RuntimeProfile) -> bool
 
 
 def rule_fallback_problems(
-    review: AIEntryReview, *, signal_score: float, settings: Settings, profile: RuntimeProfile
+    review: AIEntryReview,
+    *,
+    signal_score: float,
+    settings: Settings,
+    profile: RuntimeProfile,
+    fallback_mode: str | None = None,
 ) -> list[str]:
     """Finalization/pre-send verification of a stored fallback review (empty list = acceptable)."""
     problems = []
-    if not rule_fallback_permitted(settings, profile):
+    if not rule_fallback_permitted(settings, profile, fallback_mode=fallback_mode):
         problems.append("rule_fallback_disabled_or_out_of_scope")
     if review.provider_model != RULE_FALLBACK_MODEL or review.request_hash is not None:
         problems.append("rule_fallback_unbound")
@@ -60,10 +74,11 @@ def rule_fallback_review(
     settings: Settings,
     profile: RuntimeProfile,
     now: datetime,
+    fallback_mode: str | None = None,
 ) -> AIEntryReview | None:
     """Build the bound deterministic review, or None when the fallback is out of policy scope."""
     if (
-        not rule_fallback_permitted(settings, profile)
+        not rule_fallback_permitted(settings, profile, fallback_mode=fallback_mode)
         or proposal.state != "pending"
         or proposal.proposal_hash is None
         or proposal.source != profile.data_source

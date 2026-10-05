@@ -23,6 +23,7 @@ from strategy.rule_fallback import rule_fallback_review
 from strategy.signal_store import SignalStore
 from strategy.strategy_router import StrategyRouter
 from strategy.volatility_filter import VolatilityFilter
+from trading.ai_controls import fallback_mode
 from trading.price_rules import snap
 from trading.risk_types import NewsWindow, RuntimeProfile
 from trading.simulation import SimulatedBroker
@@ -202,7 +203,12 @@ class SignalEngine:
         review = None
         if not self.settings.model_filter_enabled:
             review = rule_fallback_review(
-                proposal, news, settings=self.settings, profile=self.profile, now=self.clock.now()
+                proposal,
+                news,
+                settings=self.settings,
+                profile=self.profile,
+                now=self.clock.now(),
+                fallback_mode=fallback_mode(self.database, self.settings),
             )
         await asyncio.to_thread(
             self.database.audit,

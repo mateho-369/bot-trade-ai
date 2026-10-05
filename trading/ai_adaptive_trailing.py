@@ -184,6 +184,15 @@ class AdaptiveTrailing:
     def _record(
         self, event: TrailingEvent, *, model: str | None = None, context: dict | None = None
     ) -> TrailingEvent:
+        logger.info(  # ai_decisions.log
+            "AI trailing position=%s threshold=%s lock_sl=%s ai=%s final=%s source=%s",
+            event.position_id,
+            event.threshold,
+            event.mechanical_sl,
+            event.ai_decision,
+            event.final_action,
+            event.source,
+        )
         if self.journal is None:
             return event
         entry = self.journal.record(
@@ -268,7 +277,12 @@ class AdaptiveTrailing:
         if decision is None or decision.confidence < self.settings.ai_confidence_threshold:
             why = failure or "low_confidence"
             logger.warning(
-                "%s (position %s, threshold %s, %s)", MECHANICAL_WARNING, current.identifier, threshold, why
+                "%s (position %s, threshold %s, %s)",
+                MECHANICAL_WARNING,
+                current.identifier,
+                threshold,
+                why,
+                extra={"no_alert": why == "low_confidence"},  # Low confidence is normal, not an alert.
             )
             event = TrailingEvent(
                 current.identifier,

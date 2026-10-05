@@ -261,7 +261,8 @@ class LearningLoop:
                 input_summary={"symbol": snapshot.symbol},
             )
             return {"status": "unavailable"}
-        results = self.adjuster.apply_suggestion(reply) if self.adjuster is not None else []
+        context = {"regime": snapshot.regime, "news_risk": snapshot.news.get("risk", "high")}
+        results = self.adjuster.apply_suggestion(reply, context=context) if self.adjuster is not None else []
         self.journal.record(
             kind="deep_review",
             source="ai",

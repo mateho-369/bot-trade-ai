@@ -11,8 +11,14 @@ Flow for every consultation::
 * **Circuit breaker** – AI_CIRCUIT_FAILURES consecutive failures (timeout, 429/5xx, invalid JSON)
   switch to RULE MODE for AI_CIRCUIT_COOLDOWN_SECONDS and notify the owner once; one half-open trial
   then decides whether the AI is back.
-* **Fallback** – AI unavailable => the deterministic Technical Signal Score. Trading is NOT blocked
-  by an outage; a VALID AI "wait"/low confidence is final and never shopped past.
+* **Retries** – ENTRY decisions retry transient failures up to AI_MAX_RETRIES times INSIDE the
+  AI_TIMEOUT_SECONDS budget (one circuit failure per decision). Trailing (2 s) never retries.
+* **Fallback** – owner-controlled AI_FALLBACK_MODE (DB override via /ai_fallback_block,
+  /ai_fallback_technical or the Mini App, else the setting):
+  BLOCK_ON_AI_FAILURE (default) => no new entry while the AI cannot answer ("ai_blocked");
+  TECHNICAL_ONLY => the deterministic Technical Signal Score (>= AI_RULE_FALLBACK_MIN_SCORE).
+  Mechanical trailing and protective exits continue in BOTH modes. A VALID AI "wait"/low
+  confidence is final and never shopped past.
 * **Gate** – an action is executable only if confidence >= AI_CONFIDENCE_THRESHOLD and every hard
   limit passes. The brain can only ADD vetoes or REDUCE risk: it never sends orders itself and never
   bypasses the risk engine, news gates, stage gates, owner pause or the kill switch.
@@ -21,6 +27,7 @@ Flow for every consultation::
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from collections import OrderedDict
 from dataclasses import dataclass, field
@@ -42,6 +49,10 @@ from ai.market_awareness import MarketSnapshot
 from core.security import canonical_json, sha256_json
 from core.settings import Settings
 from trading.types import Clock
+
+LOG = logging.getLogger("ai.brain")
+BLOCK_MODE = "BLOCK_ON_AI_FAILURE"
+BLOCKED_MODEL = "block-on-ai-failure"
 
 FAILURES = (
     AIUnavailable,
@@ -75,8 +86,10 @@ SYSTEM_PROMPTS = {
     "config": (
         "You review bot configuration for the current market. Return ONLY one JSON object matching "
         "the schema. SUGGEST conservative adjustments only; use null for unchanged values. Bounds: "
-        "risk 0.1-1.0 percent, target 1-20 USD, max daily trades 3-15, max spread 10-50 points. You "
-        "cannot change max open positions, the kill switch, loss limits or safety gates."
+        "risk 0.1-1.0 percent, target 1-20 USD, max daily trades 6-20, max open positions 1-5, max "
+        "spread 10-50 points. Raise trades/positions/risk ONLY in a strong trend (high ADX) with low "
+        "news risk; lower them in choppy markets or before high-impact news. You cannot change the "
+        "kill switch, the daily-loss/drawdown limits or safety gates."
     ),
     "trade_review": (
         "You review ONE closed trade for a learning loop. Return ONLY one JSON object matching the "
@@ -181,7 +194,7 @@ class BrainResult:
 
     kind: str
     decision: AIDecision | TrailingDecision
-    source: str  # ai | cache | rule_fallback | mechanical
+    source: str  # ai | cache | rule_fallback | ai_blocked | mechanical
     model: str
     executable: bool
     reasons: tuple[str, ...] = ()
@@ -193,6 +206,21 @@ class BrainResult:
     @property
     def ai_answered(self) -> bool:
         return self.source in {"ai", "cache"}
+
+
+def blocked_decision(snapshot: MarketSnapshot) -> AIDecision:
+    """BLOCK_ON_AI_FAILURE: an explicit WAIT. No confidence is invented; nothing can execute."""
+    news_risk = snapshot.news.get("risk", "high")
+    return AIDecision(
+        action="wait",
+        confidence=0.0,
+        reason="ai_unavailable_block_mode: AI_FALLBACK_MODE=BLOCK_ON_AI_FAILURE blocks new entries",
+        suggested_risk_percent=0.1,
+        suggested_target_profit=0.0,
+        suggested_sl_distance=0.0,
+        news_risk=news_risk if news_risk in {"low", "medium", "high"} else "high",
+        market_condition=snapshot.regime,
+    )
 
 
 def technical_fallback(snapshot: MarketSnapshot, settings: Settings) -> AIDecision:
@@ -232,9 +260,16 @@ class AIBrain:
         journal=None,
         adjuster=None,
         notifier=None,
+        fallback_mode=None,
+        limits=None,
+        status_listener=None,
         monotonic=time.monotonic,
     ):
         self.settings, self.clock = settings, clock
+        # Callables so owner runtime toggles (DB) apply without a restart; defaults = settings.
+        self.fallback_mode = fallback_mode or (lambda: settings.ai_fallback_mode)
+        self.limits = limits
+        self.status_listener = status_listener
         self.provider, self.deep_provider = provider, deep_provider
         self.journal, self.adjuster, self.notifier = journal, adjuster, notifier
         self.circuit = CircuitBreaker(
@@ -248,7 +283,7 @@ class AIBrain:
             settings.ai_max_concurrent, settings.ai_queue_min_interval_ms, monotonic=monotonic
         )
         self.pause_advisory_until = None
-        self.stats = {"ai": 0, "cache": 0, "rule_fallback": 0, "failures": 0}
+        self.stats = {"ai": 0, "cache": 0, "rule_fallback": 0, "ai_blocked": 0, "failures": 0, "retries": 0}
 
     @classmethod
     def from_settings(cls, settings: Settings, clock: Clock, **kwargs) -> AIBrain:
@@ -266,7 +301,15 @@ class AIBrain:
         return "ai" if self.circuit.state == "closed" else "rule"
 
     # -- provider call ------------------------------------------------------------------------
-    async def _ask(self, kind: str, payload: dict, *, deep: bool = False, timeout: float | None = None):
+    async def _ask(
+        self,
+        kind: str,
+        payload: dict,
+        *,
+        deep: bool = False,
+        timeout: float | None = None,
+        retries: int = 0,
+    ):
         """Return (validated contract, model, simulated) or raise one of FAILURES. Never partial."""
         provider = self.deep_provider if deep else self.provider
         circuit = self.deep_circuit if deep else self.circuit
@@ -280,21 +323,39 @@ class AIBrain:
         ]
         limit = timeout if timeout is not None else self.settings.ai_timeout_seconds
         try:
-            async with asyncio.timeout(limit):
-                content = await self.queue.run(lambda: provider.complete(messages, STRICT_SCHEMAS[kind]))
-            reply = decode(kind, content.content)
+            async with asyncio.timeout(limit):  # ONE budget for the first attempt and every retry.
+                for attempt in range(retries + 1):
+                    try:
+                        content = await self.queue.run(
+                            lambda: provider.complete(messages, STRICT_SCHEMAS[kind])
+                        )
+                        reply = decode(kind, content.content)
+                        break
+                    except asyncio.CancelledError:
+                        raise
+                    except FAILURES as exc:
+                        if attempt >= retries or isinstance(exc, AIUnavailable):
+                            raise
+                        self.stats["retries"] += 1
+                        await asyncio.sleep(min(0.25 * (2**attempt), 1.0))
         except asyncio.CancelledError:
             circuit.trial_in_flight = False
             raise
         except FAILURES as exc:
             self.stats["failures"] += 1
-            if circuit.failure() and self.notifier is not None:
-                self.notifier.circuit_opened(
-                    reason=type(exc).__name__, failures=circuit.consecutive, deep=deep
-                )
+            if circuit.failure():
+                if self.notifier is not None:
+                    self.notifier.circuit_opened(
+                        reason=type(exc).__name__, failures=circuit.consecutive, deep=deep
+                    )
+                if self.status_listener is not None and not deep:
+                    self.status_listener("rule", "circuit_open:" + type(exc).__name__)
             raise
-        if circuit.success() and self.notifier is not None:
-            self.notifier.circuit_closed(deep=deep)
+        if circuit.success():
+            if self.notifier is not None:
+                self.notifier.circuit_closed(deep=deep)
+            if self.status_listener is not None and not deep:
+                self.status_listener("ai", "circuit_closed")
         return reply, content.model, bool(getattr(content, "simulated", False))
 
     # -- decisions ----------------------------------------------------------------------------
@@ -321,10 +382,11 @@ class AIBrain:
             spread, limit = snapshot.quote.get("spread_points"), snapshot.quote.get("spread_limit_points")
             if spread is None or limit is None or spread > limit:
                 reasons.append("spread_above_limit")
-            daily = effective.get("max_daily_trades", cfg.max_daily_trades)
-            if trades_today >= min(daily, 15):
+            limits = self.limits() if self.limits is not None else None
+            daily = limits.max_daily_trades if limits is not None else cfg.max_daily_trades
+            open_cap = limits.max_open_positions if limits is not None else cfg.max_open_positions
+            if trades_today >= daily:
                 reasons.append("max_daily_trades_reached")
-            open_cap = min(cfg.max_open_positions, 3)
             if len(snapshot.positions) >= open_cap:
                 reasons.append("max_open_positions_reached")
             technical_side = (snapshot.technical or {}).get("side")
@@ -379,17 +441,28 @@ class AIBrain:
             source = "cache"
         else:
             try:
-                decision, model, simulated = await self._ask("decision", prompt)
+                decision, model, simulated = await self._ask(
+                    "decision",
+                    prompt,
+                    retries=self.settings.ai_max_retries if kind == "entry" else 0,
+                )
                 self.cache.put(key, (decision, model, simulated))
             except FAILURES as exc:
                 failure = type(exc).__name__ if not isinstance(exc, AIUnavailable) else str(exc)
-                decision, source, model = (
-                    technical_fallback(snapshot, self.settings),
-                    "rule_fallback",
-                    ("technical-score-v1"),
-                )
+                if self._fallback_mode() == BLOCK_MODE:
+                    LOG.warning("AI_FALLBACK: AI unavailable, blocking new entries")
+                    decision, source, model = blocked_decision(snapshot), "ai_blocked", BLOCKED_MODEL
+                else:
+                    LOG.warning("AI_FALLBACK: AI unavailable, using technical fallback")
+                    decision, source, model = (
+                        technical_fallback(snapshot, self.settings),
+                        "rule_fallback",
+                        ("technical-score-v1"),
+                    )
         self.stats[source] += 1
         reasons = self.gate(decision, snapshot, trades_today=trades_today)
+        if source == "ai_blocked":
+            reasons = (*reasons, "ai_unavailable_block_mode")
         if source == "rule_fallback" and not self.settings.ai_rule_fallback_enabled and decision.opens:
             reasons = (*reasons, "rule_fallback_disabled")
         journal_id = self._journal(
@@ -416,9 +489,26 @@ class AIBrain:
             journal_id,
             {"simulated": simulated},
         )
+        LOG.info(  # ai_decisions.log
+            "AI decision kind=%s symbol=%s action=%s confidence=%.0f source=%s executable=%s reasons=%s",
+            kind,
+            snapshot.symbol,
+            decision.action,
+            float(decision.confidence or 0),
+            source,
+            not reasons,
+            ",".join(reasons)[:200] or "-",
+        )
         if self.notifier is not None:
             self.notifier.decision(result, snapshot.symbol)
         return result
+
+    def _fallback_mode(self) -> str:
+        try:
+            mode = self.fallback_mode()
+        except Exception:
+            mode = BLOCK_MODE  # Unknown owner preference => the safest mode.
+        return mode if mode in {BLOCK_MODE, "TECHNICAL_ONLY"} else BLOCK_MODE
 
     async def trailing_advice(self, context: dict, *, threshold: int, timeout: float | None = None):
         """Advice for an ALREADY-LOCKED threshold -> (TrailingDecision | None, model, failure)."""
@@ -461,11 +551,18 @@ class AIBrain:
 
 
 def _hard_limit_view() -> dict:
-    from ai.config_adjuster import ABSOLUTE_MAX_OPEN_POSITIONS, HARD_LIMITS
+    from ai.config_adjuster import HARD_LIMITS
+    from trading.ai_controls import HARD_MAX_DAILY_TRADES, HARD_MAX_OPEN_POSITIONS, HARD_MAX_RISK_PERCENT
 
     return {
         **{k: [str(low), str(high)] for k, (low, high) in HARD_LIMITS.items()},
-        "max_open_positions": f"fixed<={ABSOLUTE_MAX_OPEN_POSITIONS} (not adjustable)",
+        "absolute_caps": {
+            "max_daily_trades": HARD_MAX_DAILY_TRADES,
+            "max_open_positions": HARD_MAX_OPEN_POSITIONS,
+            "risk_percent_per_trade": str(HARD_MAX_RISK_PERCENT),
+        },
+        "increase_rule": "raise trades/positions/risk only in a strong trend with low news risk",
+        "owner_approval": "changes over 50 percent of the owner default need owner approval",
         "kill_switch": "owner-only (not adjustable)",
     }
 
@@ -480,6 +577,7 @@ __all__ = [
     "CircuitBreaker",
     "RequestQueue",
     "TTLCache",
+    "blocked_decision",
     "decimal_risk",
     "technical_fallback",
 ]

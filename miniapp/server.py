@@ -17,7 +17,7 @@ from starlette.exceptions import HTTPException
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from app.owner_identity import OwnerInterfaceError
-from miniapp.api import ai, control, dashboard, logs, news, settings, trades
+from miniapp.api import ai, alerts, control, dashboard, logs, news, settings, trades
 from miniapp.security import OwnerSecurityMiddleware, error_content
 
 STATIC = Path(__file__).resolve().parent / "static"
@@ -108,6 +108,7 @@ def create_app(configuration, owner_services, *, preview_only=False, telegram_tr
         settings.router,
         logs.router,
         control.router,
+        alerts.router,
     ):
         application.include_router(router)
 

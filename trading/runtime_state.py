@@ -207,6 +207,25 @@ class RuntimeControl:
                 session, "owner.recovery_reviewed", "owner", {"owner_id": owner_id, "account": account_key}
             )
 
+    def auto_pause(self, reason: str, *, account_key: str = "unbound") -> bool:
+        """Pause NEW entries after a CRITICAL alert (Alert Center). Not a halt: it never sets
+        ``last_error``, never clears kill/loss latches and never touches positions; the owner
+        resumes with the normal fully-gated /resume. Returns True when the state changed."""
+        if reason not in {"critical_alert"}:
+            raise ValueError("unknown auto-pause reason identifier")
+        with self.database.locked_session() as session:
+            state = session.get(BotState, 1)
+            if state is None:
+                raise TradingDisabled("missing control state")
+            if state.desired_state != "running":
+                return False
+            state.desired_state = "paused"
+            state.revision += 1
+            self.database.add_audit(
+                session, "runtime.auto_paused", "runtime", {"reason": reason, "account": account_key}
+            )
+            return True
+
     def halt(self, reason: str, *, account_key: str = "unbound") -> None:
         # Fixed identifiers only; never accept provider/SDK error bodies here.
         if reason not in {

@@ -15,6 +15,7 @@ from app.owner_identity import OwnerInterfaceError
 from app.rate_limits import WindowLimiter
 from telegram_bot.miniapp_auth import BAD_PERCENT, strict_json
 
+ALERT_LEVELS = frozenset({"INFO", "WARNING", "ERROR", "CRITICAL"})  # Only /api/alerts filter.
 SENSITIVE_HEADERS = {
     b"host",
     b"origin",
@@ -103,9 +104,14 @@ class OwnerSecurityMiddleware:
                 errors="strict",
             )
             keys = [key for key, _ in pairs]
-            if len(keys) != len(set(keys)) or any(key not in {"limit", "offset"} for key in keys):
+            if len(keys) != len(set(keys)) or any(key not in {"limit", "offset", "level"} for key in keys):
                 raise ValueError
-            if any(not value.isascii() or not value.isdigit() or len(value) > 5 for _, value in pairs):
+            if any(
+                value not in ALERT_LEVELS
+                if key == "level"
+                else not value.isascii() or not value.isdigit() or len(value) > 5
+                for key, value in pairs
+            ):
                 raise ValueError
         except (ValueError, UnicodeError):
             raise OwnerInterfaceError("invalid_request_query", 400) from None

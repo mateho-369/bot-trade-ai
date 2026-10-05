@@ -51,6 +51,9 @@ def main(argv: list[str] | None = None) -> int:
             from ai.decision_journal import ensure_journal_tables
 
             ensure_journal_tables(database)  # Additive AI journal/overlay tables; core schema unchanged.
+            from app.alerts import ensure_alert_tables
+
+            ensure_alert_tables(database)  # Additive Alert Center table.
         migration = {}
         if args.command == "migrate-db":
             from core.migrations import migrate_v1_to_v2

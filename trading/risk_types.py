@@ -22,7 +22,16 @@ def json_dict(value: object) -> dict:
 
 def source_code_hash(root: Path) -> str:
     """Bind runnable local code, not docs/tests, credentials, caches or runtime data."""
-    names = ["main.py", "config.py", "requirements.txt", "watchdog.py", "launcher.py"]
+    names = [
+        "main.py",
+        "config.py",
+        "requirements.txt",
+        "watchdog.py",
+        "launcher.py",
+        "install.bat",
+        "start.bat",
+        "start_demo.bat",
+    ]
     for directory in (
         "core",
         "trading",

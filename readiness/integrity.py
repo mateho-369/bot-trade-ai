@@ -53,7 +53,7 @@ IGNORED = frozenset(
         "data",
     }
 )
-RUNNABLE = frozenset({".py", ".pyw", ".pyi", ".ps1", ".vbs", ".js", ".html", ".css"})
+RUNNABLE = frozenset({".py", ".pyw", ".pyi", ".ps1", ".vbs", ".js", ".html", ".css", ".bat", ".cmd"})
 CONFIG_NAMES = frozenset(
     {".env.example", ".gitignore", "requirements.txt", "requirements.linux.lock.txt", "pyproject.toml"}
 )

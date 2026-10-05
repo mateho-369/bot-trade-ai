@@ -22,6 +22,7 @@ from strategy.base_strategy import (
 )
 from strategy.news_filter import NewsFilter
 from strategy.rule_fallback import RULE_FALLBACK_PROVIDER, rule_fallback_problems
+from trading.ai_controls import fallback_mode
 from trading.risk_types import DecisionContext, NewsWindow, RuntimeProfile
 from trading.types import BrokerError, Clock, Side, SourceKind, TradingDisabled
 
@@ -181,7 +182,11 @@ class SignalStore:
                 )
                 or review.provider == RULE_FALLBACK_PROVIDER
                 and rule_fallback_problems(
-                    review, signal_score=row.score, settings=self.settings, profile=self.profile
+                    review,
+                    signal_score=row.score,
+                    settings=self.settings,
+                    profile=self.profile,
+                    fallback_mode=fallback_mode(self.database, self.settings),
                 )
             ):
                 raise ValueError
@@ -410,7 +415,11 @@ class SignalStore:
                 if review.provider == RULE_FALLBACK_PROVIDER:
                     reasons.extend(
                         rule_fallback_problems(
-                            review, signal_score=row.score, settings=cfg, profile=self.profile
+                            review,
+                            signal_score=row.score,
+                            settings=cfg,
+                            profile=self.profile,
+                            fallback_mode=fallback_mode(self.database, cfg),
                         )
                     )
                 if review.decision != "approve":

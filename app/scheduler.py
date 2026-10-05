@@ -12,6 +12,7 @@ from datetime import timedelta
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
+from app.alerts import resolve_older_than
 from app.async_tools import durable_call
 from app.backups import create_backup, prune_db_snapshots
 from app.process_guard import operator_stop_requested
@@ -34,6 +35,7 @@ class RuntimeScheduler:
         self.accepting = True
         self.reviews = {}
         self.locks = {}
+        self.broker_down = set()  # Jobs whose last run failed with a broker/connection error.
         self.jobs = {
             "heartbeat": self.heartbeat,
             "positions": self.positions,
@@ -48,6 +50,8 @@ class RuntimeScheduler:
             "ai_learning": self.ai_learning,
             "ai_config_review": self.ai_config_review,
             "ai_nightly_review": self.ai_nightly_review,
+            "ai_status": self.ai_status,
+            "alerts": self.alerts,
         }
 
     def control_state(self):
@@ -87,21 +91,55 @@ class RuntimeScheduler:
             try:
                 result = await self.jobs[name]()
                 success = True
+                if name in self.broker_down:
+                    self.broker_down.discard(name)
+                    if not self.broker_down:
+                        self.alert(
+                            "WARNING",
+                            "MT5 Client",
+                            "MT5 reconnected: broker connection restored",
+                            action="Entries stay paused; review the halt, then resume when safe",
+                        )
                 return result
             except asyncio.CancelledError:
                 # Unexpected external cancellation is uncertainty, not a retry instruction.
                 await self.failed(name, cancelled=True)
                 raise
-            except Exception:
-                await self.failed(name)
+            except Exception as exc:
+                await self.failed(name, error=exc)
                 return {"state": "failed", "job": name}
             finally:
                 self.health.job_finished(name, success=success)
                 self.active.discard(task)
 
-    async def failed(self, name, *, cancelled=False):
+    def alert(self, level, component, message, *, details=None, action=None):
+        center = getattr(self.resources, "alerts", None)
+        if center is not None:
+            center.emit(level, component, message, details=details, action=action)
+
+    async def failed(self, name, *, cancelled=False, error=None):
         r = self.resources
-        LOG.error("Runtime job unavailable: %s; raw exception suppressed", name)
+        explicit = getattr(r, "alerts", None) is not None
+        LOG.error("Runtime job unavailable: %s; raw exception suppressed", name, extra={"alerted": explicit})
+        critical_path = name in {"heartbeat", "positions", "signals", "position_reviews"}
+        connection = isinstance(error, (BrokerError, ConnectionError, OSError, TimeoutError))
+        if critical_path and connection:
+            self.broker_down.add(name)
+            self.alert(
+                "ERROR",
+                "MT5 Client",
+                "Connection lost: broker unavailable",
+                details={"job": name, "error_type": type(error).__name__},
+                action="New entries halted (broker_unstable); protective jobs keep retrying",
+            )
+        else:
+            self.alert(
+                "ERROR" if critical_path or cancelled else "WARNING",
+                "Scheduler",
+                f"Runtime job failed: {name}",
+                details={"job": name, "cancelled": cancelled, "error_type": type(error).__name__},
+                action="Entries halted; review errors.log" if critical_path else "Retried on next interval",
+            )
         try:
             if name in {"heartbeat", "positions", "signals", "position_reviews"}:
                 await durable_call(
@@ -237,6 +275,17 @@ class RuntimeScheduler:
             result["ai"] = await r.ai_first.notifier.drain(getattr(r.telegram, "bot", None))
         return result
 
+    async def ai_status(self):
+        layer = getattr(self.resources, "ai_first", None)
+        return {"state": "disabled"} if layer is None else await durable_call(layer.publish_status)
+
+    async def alerts(self):
+        r = self.resources
+        center = getattr(r, "alerts", None)
+        if center is None:
+            return {"state": "disabled"}
+        return await center.flush(getattr(r.telegram, "bot", None))
+
     async def ai_learning(self):
         layer = getattr(self.resources, "ai_first", None)
         return {"state": "disabled"} if layer is None else await layer.learn_closed_trades()
@@ -255,6 +304,11 @@ class RuntimeScheduler:
             r.engine.account_key, start=r.broker.clock.now() - timedelta(days=1)
         )
         await durable_call(r.notices.enqueue, "daily_report", dedup=r.broker.clock.now().date().isoformat())
+        if getattr(r, "alerts", None) is not None:
+            try:  # Housekeeping only: acknowledged alerts older than 24 h are marked resolved.
+                await asyncio.to_thread(resolve_older_than, r.database, r.broker.clock, hours=24)
+            except Exception:
+                LOG.info("Alert housekeeping unavailable this cycle", extra={"no_alert": True})
         return report
 
     async def learning(self):
@@ -288,8 +342,9 @@ class RuntimeScheduler:
             "notifications": cfg.runtime_notifications_seconds,
             "news_advisory": max(300, cfg.news_poll_seconds),
             "position_reviews": cfg.ai_position_review_seconds,
+            **({"alerts": 5} if getattr(self.resources, "alerts", None) is not None else {}),
             **(
-                {"ai_learning": 300, "ai_config_review": 1800}
+                {"ai_learning": 300, "ai_config_review": 1800, "ai_status": 60}
                 if getattr(self.resources, "ai_first", None) is not None
                 else {}
             ),

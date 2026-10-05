@@ -1,30 +1,43 @@
-"""AI dynamic config adjustment: AI SUGGESTS, bounds decide, owner APPROVES majors.
+"""AI dynamic config adjustment: AI SUGGESTS, bounds decide, owner APPROVES big changes.
 
-Hard limits are module constants (not settings), so neither the AI nor an .env edit can loosen
-them here. The overlay can only act INSIDE the owner's configured ceilings:
+Two layers (see ``trading.ai_controls``):
 
-* risk_percent_per_trade  0.1..1.0 %  effective = min(overlay, owner EFFECTIVE risk ceiling)
-* target_profit_per_trade $1..$20     advisory target fed to the AI/trailing context
-* max_daily_trades        3..15       effective = min(overlay, owner MAX_DAILY_TRADES)
+Layer 1 – AI-adjustable inside these bounds (module constants, never loosened by AI or .env here):
+
+* max_daily_trades        6..20       owner default MAX_DAILY_TRADES (12)
+* max_open_positions      1..5        owner default MAX_OPEN_POSITIONS (3)
+* risk_percent_per_trade  0.1..1.0 %  owner default MAX_RISK_PERCENT_PER_TRADE (0.5)
+* target_profit_per_trade $1..$20     owner default TARGET_PROFIT_USD_PER_TRADE (5)
 * max_spread_points       10..50      effective = min(overlay, global cap); never applied to a
                                         symbol with an explicit SYMBOL_SPREAD_LIMITS_JSON entry
 * skip_trailing_levels    {30,60,90}  skips the AI CONSULTATION only; mechanical locks still fire
 * strategy_weights        major only  routed to the existing owner proposal (rebalance_weights)
 * symbols_to_trade        major only  subset of the owner-configured SYMBOLS (remove/re-add)
 
-FORBIDDEN (always rejected + audited): max_open_positions (fixed, <=3), kill switch, live/paper
-mode, start paused, daily-loss/drawdown caps, news/safety gates, broker write authority.
+Layer 2 – hard caps the AI can NEVER exceed: 25 trades/day, 5 open positions, 1.0 % risk; daily
+loss 3 % and drawdown 10 % latch an auto-pause (risk engine). FORBIDDEN parameters (always rejected
++ audited): kill switch, live/paper mode, start paused, daily-loss/drawdown caps, news/safety gates,
+broker write authority, the owner's MAX_RISK_PERCENT_PER_TRADE setting itself.
 
-Minor = risk change <= 0.1 percentage points or target change <= $1 (auto-applies when
-AI_CONFIG_AUTO_APPLY_MINOR=true). Everything else is MAJOR: stored pending and surfaced to the
-owner through the existing Telegram /approve /reject and Mini App proposal flow. Every proposal,
-application, rejection and forbidden attempt is written to audit_logs.
+Rules:
+
+* An INCREASE of trades/day, open positions or risk is accepted only when the market context is a
+  strong trend (regime ``trending`` = ADX >= 25 with efficient movement) and news risk is not high;
+  otherwise it is rejected with ``increase_requires_strong_trend``. Decreases are always allowed.
+* A change of more than 50 % relative to the owner default needs owner approval (Telegram
+  /approve /reject or Mini App). Changes within 50 % auto-apply when AI_CONFIG_AUTO_APPLY_MINOR=true.
+  Non-numeric changes (weights, symbols, skip levels) always need approval.
+* Every proposal, application, rejection and forbidden attempt is written to ``config_history`` and
+  ``audit_logs`` with its reason. Applied limit values are materialized into ``dynamic_config``,
+  which the risk engine reads ONLY while the AI is available (else owner defaults apply).
 """
 
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import dataclass
+from datetime import timedelta
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 
 from sqlalchemy import select
@@ -35,22 +48,33 @@ from core.database import Database
 from core.models import AISuggestion
 from core.security import sha256_json
 from core.settings import Settings
+from trading.ai_controls import (
+    DYNAMIC_BOUNDS,
+    DYNAMIC_PARAMETERS,
+    HARD_MAX_DAILY_TRADES,
+    HARD_MAX_OPEN_POSITIONS,
+    HARD_MAX_RISK_PERCENT,
+    clear_dynamic,
+    effective_limits,
+    write_dynamic,
+)
 from trading.types import Clock, TradingDisabled
 
+LOG = logging.getLogger("ai.config")
+
 HARD_LIMITS: dict[str, tuple[Decimal, Decimal]] = {
-    "risk_percent_per_trade": (Decimal("0.1"), Decimal("1.0")),
-    "target_profit_per_trade": (Decimal("1"), Decimal("20")),
-    "max_daily_trades": (Decimal("3"), Decimal("15")),
+    **DYNAMIC_BOUNDS,
     "max_spread_points": (Decimal("10"), Decimal("50")),
 }
-ABSOLUTE_MAX_RISK_PERCENT = Decimal("1.0")
-ABSOLUTE_MAX_DAILY_TRADES = 15
-ABSOLUTE_MAX_OPEN_POSITIONS = 3  # Never changeable by AI.
-MINOR_STEPS = {"risk_percent_per_trade": Decimal("0.1"), "target_profit_per_trade": Decimal("1")}
+ABSOLUTE_MAX_RISK_PERCENT = HARD_MAX_RISK_PERCENT
+ABSOLUTE_MAX_DAILY_TRADES = HARD_MAX_DAILY_TRADES
+ABSOLUTE_MAX_OPEN_POSITIONS = HARD_MAX_OPEN_POSITIONS
+INTEGER_PARAMETERS = frozenset({"max_daily_trades", "max_open_positions", "max_spread_points"})
+INCREASE_GUARDED = frozenset({"max_daily_trades", "max_open_positions", "risk_percent_per_trade"})
+APPROVAL_RELATIVE_CHANGE = Decimal("0.5")  # > 50 % vs the owner default => owner approval.
 ADJUSTABLE = frozenset({*HARD_LIMITS, "skip_trailing_levels", "strategy_weights", "symbols_to_trade"})
 FORBIDDEN = frozenset(
     {
-        "max_open_positions",
         "kill_switch",
         "kill_switch_active",
         "live_trading",
@@ -98,13 +122,13 @@ def validate_value(settings: Settings, parameter: str, value):
     if parameter in HARD_LIMITS:
         low, high = HARD_LIMITS[parameter]
         number = _decimal(value)
-        if parameter in {"max_daily_trades", "max_spread_points"}:
+        if parameter in INTEGER_PARAMETERS:
             if number != number.to_integral_value():
                 raise ValueError("integer required")
             number = number.to_integral_value()
         if not low <= number <= high:
             raise ValueError("outside hard bounds")
-        if parameter in {"max_daily_trades", "max_spread_points"}:
+        if parameter in INTEGER_PARAMETERS:
             return int(number)
         return str(number.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP).normalize())
     if parameter == "skip_trailing_levels":
@@ -157,6 +181,7 @@ class AIConfigAdjuster:
             "risk_percent_per_trade": str(cfg.effective_risk_percent),
             "target_profit_per_trade": str(cfg.target_profit_usd_per_trade),
             "max_daily_trades": cfg.max_daily_trades,
+            "max_open_positions": cfg.max_open_positions,
             "max_spread_points": cfg.max_spread_points,
             "skip_trailing_levels": [],
             "strategy_weights": {k: str(v) for k, v in cfg.strategy_weights.items()},
@@ -176,26 +201,27 @@ class AIConfigAdjuster:
                 self._cache = {row.parameter: row.value for row in rows}
         return dict(self._cache)
 
+    def limits(self):
+        """Current layer-1 limits (owner defaults while the AI is unavailable)."""
+        return effective_limits(self.database, self.settings, self.clock)
+
     def effective(self) -> dict:
         """Overlay clamped by hard limits AND owner ceilings. This is what gates consume."""
-        raw, cfg, result = self.overlay(), self.settings, {}
-        if "risk_percent_per_trade" in raw:
-            result["risk_percent_per_trade"] = min(
-                Decimal(raw["risk_percent_per_trade"]), cfg.effective_risk_percent, ABSOLUTE_MAX_RISK_PERCENT
-            )
-        if "target_profit_per_trade" in raw:
-            result["target_profit_per_trade"] = Decimal(raw["target_profit_per_trade"])
-        if "max_daily_trades" in raw:
-            result["max_daily_trades"] = min(
-                int(raw["max_daily_trades"]), cfg.max_daily_trades, ABSOLUTE_MAX_DAILY_TRADES
-            )
+        raw, cfg = self.overlay(), self.settings
+        limits = self.limits()
+        result = {
+            "risk_percent_per_trade": limits.risk_percent,
+            "target_profit_per_trade": limits.target_usd,
+            "max_daily_trades": limits.max_daily_trades,
+            "max_open_positions": limits.max_open_positions,
+            "limits_source": limits.source,
+        }
         if "max_spread_points" in raw:
             result["max_spread_points"] = min(int(raw["max_spread_points"]), cfg.max_spread_points)
         if "skip_trailing_levels" in raw:
             result["skip_trailing_levels"] = tuple(raw["skip_trailing_levels"])
         if "symbols_to_trade" in raw:
             result["symbols_to_trade"] = tuple(s for s in raw["symbols_to_trade"] if s in cfg.symbols)
-        result["max_open_positions"] = min(cfg.max_open_positions, ABSOLUTE_MAX_OPEN_POSITIONS)
         return result
 
     def spread_limit(self, logical: str | None, native: str | None = None) -> int:
@@ -209,14 +235,50 @@ class AIConfigAdjuster:
         self.database.audit(action, "ai", details)
 
     def _classify(self, parameter: str, value) -> str:
-        if parameter not in MINOR_STEPS:
+        """minor = within 50 % of the OWNER DEFAULT (auto); major = owner approval required."""
+        if parameter not in HARD_LIMITS:
             return "major"
-        current = self.overlay().get(parameter, self._owner_value(parameter))
-        return (
-            "minor" if abs(Decimal(str(value)) - Decimal(str(current))) <= MINOR_STEPS[parameter] else "major"
-        )
+        default = Decimal(str(self._owner_value(parameter)))
+        if default <= 0:
+            return "major"
+        change = abs(Decimal(str(value)) - default) / default
+        return "minor" if change <= APPROVAL_RELATIVE_CHANGE else "major"
 
-    def propose(self, parameter: str, value, *, reason: str, source: str = "ai") -> AdjustmentResult:
+    @staticmethod
+    def _strong_trend(context: dict | None) -> bool:
+        context = context or {}
+        return context.get("regime") == "trending" and context.get("news_risk") in {"low", "medium"}
+
+    def propose(
+        self,
+        parameter: str,
+        value,
+        *,
+        reason: str,
+        source: str = "ai",
+        context: dict | None = None,
+    ) -> AdjustmentResult:
+        result = self._propose(parameter, value, reason=reason, source=source, context=context)
+        LOG.info(  # ai_decisions.log: every adjustment attempt with its reason and outcome.
+            "AI config %s %s -> %s: %s (%s) reason=%s",
+            source,
+            str(parameter)[:64],
+            str(value)[:32],
+            result.status,
+            result.classification,
+            (reason or "-")[:200],
+        )
+        return result
+
+    def _propose(
+        self,
+        parameter: str,
+        value,
+        *,
+        reason: str,
+        source: str = "ai",
+        context: dict | None = None,
+    ) -> AdjustmentResult:
         reason = (reason or "-")[:600]
         if parameter in FORBIDDEN or parameter not in ADJUSTABLE:
             self._audit(
@@ -234,6 +296,25 @@ class AIConfigAdjuster:
         current = self.overlay().get(parameter, self._owner_value(parameter))
         if canonical == current:
             return AdjustmentResult(parameter, canonical, "unchanged", "unchanged", "no_change")
+        if (
+            parameter in INCREASE_GUARDED
+            and Decimal(str(canonical)) > Decimal(str(current))
+            and not self._strong_trend(context)
+        ):
+            self._audit(
+                "ai.config_increase_rejected",
+                {
+                    "parameter": parameter,
+                    "value": canonical,
+                    "previous": current,
+                    "reason": "increase_requires_strong_trend",
+                    "regime": (context or {}).get("regime"),
+                    "news_risk": (context or {}).get("news_risk"),
+                },
+            )
+            return AdjustmentResult(
+                parameter, canonical, "invalid", "rejected", "increase_requires_strong_trend"
+            )
         classification = self._classify(parameter, canonical)
         auto = classification == "minor" and self.settings.ai_config_auto_apply_minor
         suggestion_id = None
@@ -257,6 +338,8 @@ class AIConfigAdjuster:
             session.add(row)
             session.flush()
             overlay_id = row.id
+            if auto:
+                self._materialize(session)
             self.database.add_audit(
                 session,
                 "ai.config_auto_applied" if auto else "ai.config_pending_owner",
@@ -268,6 +351,7 @@ class AIConfigAdjuster:
                     "previous": current,
                     "classification": classification,
                     "suggestion_id": suggestion_id,
+                    "reason": reason[:200],
                 },
             )
         self._cache = None
@@ -308,18 +392,38 @@ class AIConfigAdjuster:
         except TradingDisabled:
             return None  # Outside the owner-safe step policy: stays a pending journal record only.
 
-    def apply_suggestion(self, config: ConfigSuggestion, *, source: str = "ai") -> list[AdjustmentResult]:
+    def _materialize(self, session) -> None:
+        """Rebuild ``dynamic_config`` from the latest APPLIED value of each layer-1 parameter."""
+        rows = session.scalars(
+            select(AIConfigOverlay)
+            .where(AIConfigOverlay.status == "applied", AIConfigOverlay.parameter.in_(DYNAMIC_PARAMETERS))
+            .order_by(AIConfigOverlay.id.asc())
+        ).all()
+        latest = {row.parameter: row for row in rows}
+        clear_dynamic(session)
+        session.flush()
+        for parameter, row in latest.items():
+            write_dynamic(
+                session, self.settings, self.clock, parameter, row.value, history_id=row.id, reason=row.reason
+            )
+
+    def apply_suggestion(
+        self, config: ConfigSuggestion, *, source: str = "ai", context: dict | None = None
+    ) -> list[AdjustmentResult]:
         """Fan out one validated AI config review into individual bounded proposals."""
         results = []
         for parameter in (
             "risk_percent_per_trade",
             "target_profit_per_trade",
             "max_daily_trades",
+            "max_open_positions",
             "max_spread_points",
         ):
-            value = getattr(config, parameter)
+            value = getattr(config, parameter, None)
             if value is not None:
-                results.append(self.propose(parameter, value, reason=config.reason, source=source))
+                results.append(
+                    self.propose(parameter, value, reason=config.reason, source=source, context=context)
+                )
         if config.skip_trailing_levels:
             results.append(
                 self.propose("skip_trailing_levels", list(config.skip_trailing_levels), reason=config.reason)
@@ -346,6 +450,8 @@ class AIConfigAdjuster:
             if row.parameter == "strategy_weights" and approve:
                 raise TradingDisabled("strategy weights apply only through the stopped owner projection")
             row.status, row.decided_at = ("applied" if approve else "rejected"), self.clock.now()
+            session.flush()
+            self._materialize(session)
             self.database.add_audit(
                 session,
                 "owner.ai_config_decided",
@@ -397,6 +503,9 @@ class AIConfigAdjuster:
                     "ai",
                     {"overlay_id": row.id, "suggestion_id": row.suggestion_id, "status": row.status},
                 )
+            if changed:
+                session.flush()
+                self._materialize(session)
         if changed:
             self._cache = None
         return changed
@@ -421,6 +530,43 @@ class AIConfigAdjuster:
                 for r in rows
             ]
 
+    def daily_summary(self, *, hours: int = 24) -> dict:
+        """Counts + latest values of the last ``hours`` of AI adjustments (nightly owner digest)."""
+        since = self.clock.now() - timedelta(hours=hours)
+        with self.database.session() as session:
+            rows = session.scalars(
+                select(AIConfigOverlay)
+                .where(AIConfigOverlay.time >= since)
+                .order_by(AIConfigOverlay.id.asc())
+            ).all()
+            counts: dict[str, int] = {}
+            changes = []
+            for row in rows:
+                counts[row.status] = counts.get(row.status, 0) + 1
+                changes.append(f"{row.parameter} {row.previous}->{row.value} ({row.status})")
+        limits = self.limits()
+        return {
+            "hours": hours,
+            "total": len(rows),
+            "counts": counts,
+            "changes": changes[-10:],
+            "current_limits": limits.as_dict(),
+        }
+
+    def daily_summary_text(self, *, hours: int = 24) -> str:
+        data = self.daily_summary(hours=hours)
+        limits = data["current_limits"]
+        lines = [
+            f"Daily AI adjustments ({data['hours']}h): {data['total']} "
+            + (", ".join(f"{k} {v}" for k, v in sorted(data["counts"].items())) or "none"),
+            f"Limits now ({limits['source']}): trades/day {limits['max_daily_trades']}, "
+            f"positions {limits['max_open_positions']}, risk {limits['risk_percent']}%, "
+            f"target ${limits['target_usd']}",
+            *data["changes"],
+            "Reset: Mini App Settings 'Reset AI to defaults' or /ai_reset",
+        ]
+        return "\n".join(lines)
+
 
 def revert_all(database: Database, clock: Clock, *, owner_id: int) -> int:
     """Owner override (/ai_reset): every applied or pending AI overlay change is reverted."""
@@ -431,10 +577,16 @@ def revert_all(database: Database, clock: Clock, *, owner_id: int) -> int:
         ).all()
         for row in rows:
             row.status, row.decided_at = "reverted", clock.now()
+        cleared = clear_dynamic(session)  # Owner defaults apply immediately.
         database.add_audit(
             session,
             "owner.ai_config_reset",
             "owner",
-            {"owner_id": owner_id, "reverted": len(rows), "ids": [r.id for r in rows][:100]},
+            {
+                "owner_id": owner_id,
+                "reverted": len(rows),
+                "dynamic_cleared": cleared,
+                "ids": [r.id for r in rows][:100],
+            },
         )
         return len(rows)

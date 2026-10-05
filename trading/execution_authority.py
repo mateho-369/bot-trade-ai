@@ -565,6 +565,7 @@ class DurableWriteAuthority:
                 "execution",
                 {
                     "key": command.idempotency_key,
+                    "operation": command.operation.value,
                     "status": result.status.value,
                     "order": result.order_ticket,
                     "deal": result.deal_ticket,

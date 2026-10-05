@@ -25,6 +25,7 @@ import pandas as pd
 
 from core.security import sanitize_text, secret_values
 from core.settings import TIMEFRAME_MINUTES, OperatingMode, Settings
+from trading.ai_controls import broker_ceilings
 from trading.authorization import (
     BrokerSnapshot,
     DenyAllWrites,
@@ -841,7 +842,7 @@ class MT5Client(ClientCalculations):
             - cost
         )
         margin = self._margin_sync(order.symbol, order.side, order.volume, worst_entry)
-        budget = account.risk_capital * self.settings.effective_risk_percent / Decimal("100")
+        budget = account.risk_capital * broker_ceilings(self.settings).risk_percent / Decimal("100")
         available = min(
             account.margin_free,
             account.risk_capital * self.settings.max_margin_usage_percent / Decimal("100") - account.margin,
@@ -889,7 +890,7 @@ class MT5Client(ClientCalculations):
             meta = self._meta_sync(order.symbol)
             tick = self._tick_sync(meta)
             validate_entry(order, meta, tick, self.settings, self.clock)
-            if len(positions) >= self.settings.max_open_positions or any(
+            if len(positions) >= broker_ceilings(self.settings).max_open_positions or any(
                 position.symbol == order.symbol for position in positions
             ):
                 raise RiskViolation("position count/same-symbol averaging is forbidden")

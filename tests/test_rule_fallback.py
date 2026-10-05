@@ -61,10 +61,13 @@ def request_for(cfg, purpose, binding=None):
 
 
 ENTRY_BINDING = {"proposal_hash": "a" * 64, "news_hash": "b" * 64}
+# These tests exercise the TECHNICAL_ONLY owner mode; BLOCK_ON_AI_FAILURE (the default) is covered
+# in tests/test_ai_fallback_mode.py.
+TECH = {"ai_fallback_mode": "TECHNICAL_ONLY"}
 
 
 async def supervised(tmp_path, providers_factory, **settings):
-    signals, execution = await make_signal_runtime(tmp_path, **settings)
+    signals, execution = await make_signal_runtime(tmp_path, **TECH, **settings)
     providers = providers_factory(execution.settings)
     router = AIRouter(execution.settings, execution.database, execution.clock, providers=providers)
     supervisor = AISupervisor(
@@ -104,12 +107,22 @@ def test_fallback_defaults_on_but_live_scope_needs_explicit_opt_in(tmp_path):
         (OperatingMode.BACKTEST, True, False),
     ):
         stub = SimpleNamespace(
-            ai_rule_fallback_enabled=True, ai_rule_fallback_allow_live=allow_live, mode=mode
+            ai_rule_fallback_enabled=True,
+            ai_rule_fallback_allow_live=allow_live,
+            mode=mode,
+            ai_fallback_mode="TECHNICAL_ONLY",
         )
         assert rule_fallback_permitted(stub, profile) is expected, mode
+        # BLOCK_ON_AI_FAILURE (the default) puts the fallback out of scope in EVERY mode.
+        assert rule_fallback_permitted(stub, profile, fallback_mode="BLOCK_ON_AI_FAILURE") is False
+    assert cfg.ai_fallback_mode == "BLOCK_ON_AI_FAILURE"
+    assert rule_fallback_permitted(cfg, profile) is False
     historical = SimpleNamespace(data_source=SourceKind.HISTORICAL)
     paper = SimpleNamespace(
-        ai_rule_fallback_enabled=True, ai_rule_fallback_allow_live=False, mode=OperatingMode.PAPER
+        ai_rule_fallback_enabled=True,
+        ai_rule_fallback_allow_live=False,
+        mode=OperatingMode.PAPER,
+        ai_fallback_mode="TECHNICAL_ONLY",
     )
     assert rule_fallback_permitted(paper, historical) is False
 
@@ -399,7 +412,7 @@ class Broken:
 
 
 async def test_reviewer_timeout_uses_rule_fallback(tmp_path):
-    signals, execution = await make_signal_runtime(tmp_path, ai_timeout_seconds=1)
+    signals, execution = await make_signal_runtime(tmp_path, **TECH, ai_timeout_seconds=1)
     try:
         ready = await signals.evaluate("EURUSD", reviewer=TooSlow(), news=news(signals.clock))
         assert ready.approved and ready.payload()["ai_review"]["provider"] == RULE_FALLBACK_PROVIDER
@@ -411,7 +424,7 @@ async def test_reviewer_timeout_uses_rule_fallback(tmp_path):
 
 async def test_rule_fallback_below_its_minimum_score_waits(tmp_path):
     signals, execution = await make_signal_runtime(
-        tmp_path, ai_timeout_seconds=1, ai_rule_fallback_min_score=100
+        tmp_path, **TECH, ai_timeout_seconds=1, ai_rule_fallback_min_score=100
     )
     try:
         result = await signals.evaluate("EURUSD", reviewer=TooSlow(), news=news(signals.clock))
@@ -423,7 +436,7 @@ async def test_rule_fallback_below_its_minimum_score_waits(tmp_path):
 
 
 async def test_unexpected_reviewer_defect_stays_fail_closed(tmp_path):
-    signals, execution = await make_signal_runtime(tmp_path)
+    signals, execution = await make_signal_runtime(tmp_path, **TECH)
     try:
         result = await signals.evaluate("EURUSD", reviewer=Broken(), news=news(signals.clock))
         assert result.state == "rejected" and "ai_unavailable_or_invalid" in result.reasons
@@ -432,7 +445,7 @@ async def test_unexpected_reviewer_defect_stays_fail_closed(tmp_path):
 
 
 async def test_timeout_with_unknown_news_never_falls_back(tmp_path):
-    signals, execution = await make_signal_runtime(tmp_path, ai_timeout_seconds=1)
+    signals, execution = await make_signal_runtime(tmp_path, **TECH, ai_timeout_seconds=1)
     try:
         result = await signals.evaluate("EURUSD", reviewer=TooSlow(), news=news(signals.clock, known=False))
         assert result.state == "rejected" and "ai_unavailable_or_invalid" in result.reasons
@@ -451,7 +464,7 @@ def _row(execution, signal_id):
 
 
 async def test_fallback_review_cannot_fabricate_confidence_or_change_risk(tmp_path):
-    signals, execution = await make_signal_runtime(tmp_path)
+    signals, execution = await make_signal_runtime(tmp_path, **TECH)
     try:
         proposal = await signals.analyze("EURUSD")
         window = news(signals.clock)
@@ -480,7 +493,7 @@ async def test_fallback_review_cannot_fabricate_confidence_or_change_risk(tmp_pa
 
 
 async def test_stored_fallback_approval_is_rechecked_against_current_policy(tmp_path):
-    signals, execution = await make_signal_runtime(tmp_path, ai_timeout_seconds=1)
+    signals, execution = await make_signal_runtime(tmp_path, **TECH, ai_timeout_seconds=1)
     try:
         ready = await signals.evaluate("EURUSD", reviewer=TooSlow(), news=news(signals.clock))
         assert ready.approved

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
 
@@ -24,8 +25,11 @@ from strategy.news_filter import NewsFilter
 from strategy.rule_fallback import rule_fallback_review
 from strategy.signal_store import SignalStore
 from strategy.volatility_filter import VolatilityFilter
+from trading.ai_controls import fallback_mode
 from trading.risk_types import NewsWindow, PositionReview, RuntimeProfile, position_review_hash
 from trading.types import BrokerError, Clock, Position, SourceKind, TradingDisabled, aware_utc
+
+LOG = logging.getLogger("ai.supervisor")
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,9 +133,19 @@ class AISupervisor:
                 if outcome not in FALLBACK_ELIGIBLE_OUTCOMES:
                     return None  # Disabled/expired: deliberate veto, never a rule-based approval.
                 # News was verified above and any enabled learning filter already passed.
+                mode = await asyncio.to_thread(fallback_mode, self.database, self.settings)
                 fallback = rule_fallback_review(
-                    stored, news, settings=self.settings, profile=self.profile, now=self.clock.now()
+                    stored,
+                    news,
+                    settings=self.settings,
+                    profile=self.profile,
+                    now=self.clock.now(),
+                    fallback_mode=mode,
                 )
+                if mode == "BLOCK_ON_AI_FAILURE":
+                    LOG.warning("AI_FALLBACK: AI unavailable, blocking new entries")
+                else:
+                    LOG.warning("AI_FALLBACK: AI unavailable, using technical fallback")
                 await asyncio.to_thread(
                     self.database.audit,
                     "ai.rule_fallback_review" if fallback is not None else "ai.rule_fallback_not_permitted",
@@ -139,6 +153,7 @@ class AISupervisor:
                     {
                         "signal_id": stored.signal_id,
                         "ai_outcome": outcome,
+                        "fallback_mode": mode,
                         "decision": fallback.decision if fallback is not None else None,
                         "technical_score": stored.score,
                     },

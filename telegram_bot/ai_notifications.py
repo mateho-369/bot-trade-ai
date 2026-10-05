@@ -22,7 +22,10 @@ MAX_OUTBOX = 50
 
 def format_decision(result, symbol: str) -> str:
     decision = result.decision
-    mode = "RULE MODE (AI unavailable)" if result.source == "rule_fallback" else f"AI ({result.source})"
+    mode = {
+        "rule_fallback": "TECHNICAL FALLBACK (AI unavailable)",
+        "ai_blocked": "BLOCKED (AI unavailable, BLOCK_ON_AI_FAILURE)",
+    }.get(result.source, f"AI ({result.source})")
     return (
         f"{HEADER} decision · {symbol}\n"
         f"{decision.action} · confidence {decision.confidence:.0f} · {mode}\n"
@@ -33,14 +36,29 @@ def format_decision(result, symbol: str) -> str:
     )
 
 
-def format_circuit(*, opened: bool, reason: str = "", failures: int = 0, deep: bool = False) -> str:
+def format_circuit(
+    *,
+    opened: bool,
+    reason: str = "",
+    failures: int = 0,
+    deep: bool = False,
+    mode: str = "BLOCK_ON_AI_FAILURE",
+) -> str:
     scope = "deep-review AI" if deep else "decision AI"
     if opened:
-        return (
-            f"{HEADER} · circuit OPEN ({scope})\n"
-            f"{failures} consecutive failures ({reason}). Switched to RULE-BASED mode "
-            "(technical signal score). Trading is not blocked; all safety gates still apply."
-        )
+        if deep:
+            effect = "Deep reviews pause; entries are unaffected."
+        elif mode == "TECHNICAL_ONLY":
+            effect = (
+                "AI_FALLBACK=TECHNICAL_ONLY: rule mode, technical score fallback may trade; "
+                "all safety gates still apply."
+            )
+        else:
+            effect = (
+                "AI_FALLBACK=BLOCK_ON_AI_FAILURE: rule mode, NEW entries are blocked until the AI "
+                "answers. Mechanical trailing and protection continue. /ai_fallback_technical to change."
+            )
+        return f"{HEADER} · circuit OPEN ({scope})\n{failures} consecutive failures ({reason}). {effect}"
     return f"{HEADER} · circuit CLOSED ({scope})\nAI answers again; rule mode ended."
 
 
@@ -73,8 +91,9 @@ def format_trailing(event) -> str:
 
 
 class AIOwnerNotifier:
-    def __init__(self, settings, *, secrets=()):
+    def __init__(self, settings, *, secrets=(), mode_provider=None):
         self.settings, self.secrets = settings, tuple(secrets)
+        self.mode_provider = mode_provider
         self.outbox: deque[str] = deque(maxlen=MAX_OUTBOX)
         self.dropped = 0
 
@@ -91,7 +110,15 @@ class AIOwnerNotifier:
             self._push(format_decision(result, symbol))
 
     def circuit_opened(self, *, reason: str, failures: int, deep: bool = False) -> None:
-        self._push(format_circuit(opened=True, reason=reason, failures=failures, deep=deep))
+        try:
+            mode = self.mode_provider() if self.mode_provider is not None else self.settings.ai_fallback_mode
+        except Exception:
+            mode = "BLOCK_ON_AI_FAILURE"
+        self._push(format_circuit(opened=True, reason=reason, failures=failures, deep=deep, mode=mode))
+
+    def summary(self, text: str) -> None:
+        """Daily AI adjustment summary and other bounded owner digests."""
+        self._push(f"{HEADER} · {text[:900]}")
 
     def circuit_closed(self, *, deep: bool = False) -> None:
         self._push(format_circuit(opened=False, deep=deep))

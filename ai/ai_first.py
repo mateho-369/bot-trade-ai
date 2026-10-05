@@ -8,8 +8,13 @@ AdaptiveTrailing (lock-first) and LearningLoop. The scheduler calls its jobs:
 * ``trailing``               – lock-first layer inside PositionManager (every position interval)
 * ``learn_closed_trades``    – learning loop for newly closed trades (every 5 minutes)
 * ``config_review``          – AI config suggestions + owner-decision sync (every 30 minutes)
-* ``nightly_review``         – deep model review (daily)
+* ``nightly_review``         – deep model review + daily AI adjustment summary (daily)
+* ``publish_status``         – AI availability heartbeat for the dynamic limits (every 60 s and on
+                               every circuit open/close); stale/rule => owner default limits
 * ``notifier.drain``         – owner Telegram notifications
+
+AI_FALLBACK_MODE is resolved per decision from ``trading.ai_controls.fallback_mode`` (owner DB
+override, else the setting), so /ai_fallback_block and /ai_fallback_technical apply without restart.
 
 Constructing the layer performs no provider request and no broker write.
 """
@@ -30,6 +35,7 @@ from ai.market_awareness import MarketAwarenessEngine, PerformanceTracker
 from core.models import Trade
 from telegram_bot.ai_notifications import AIOwnerNotifier
 from trading.ai_adaptive_trailing import AdaptiveTrailing
+from trading.ai_controls import fallback_mode, publish_ai_status
 from trading.types import BrokerError, ResultStatus, RiskViolation
 
 EXECUTED = frozenset({ResultStatus.FILLED.value, ResultStatus.PARTIAL.value, ResultStatus.ACCEPTED.value})
@@ -39,8 +45,9 @@ class AIFirstLayer:
     def __init__(self, database, settings, broker, engine, supervisor, *, brain=None, provider=None):
         clock = broker.clock
         self.database, self.settings, self.engine, self.clock = database, settings, engine, clock
+        self.alerts = None  # Optional app.alerts.AlertCenter attached by the runtime.
         self.journal = DecisionJournal(database, clock)
-        self.notifier = AIOwnerNotifier(settings, secrets=database.secrets)
+        self.notifier = AIOwnerNotifier(settings, secrets=database.secrets, mode_provider=self.fallback_mode)
         self.adjuster = AIConfigAdjuster(
             database,
             settings,
@@ -52,9 +59,20 @@ class AIFirstLayer:
         self.awareness = MarketAwarenessEngine(
             broker, settings, clock, performance=self.performance, overlay=self.adjuster, journal=self.journal
         )
-        common = {"journal": self.journal, "adjuster": self.adjuster, "notifier": self.notifier}
+        common = {
+            "journal": self.journal,
+            "adjuster": self.adjuster,
+            "notifier": self.notifier,
+            "fallback_mode": self.fallback_mode,
+            "limits": self.adjuster.limits,
+            "status_listener": self._status_changed,
+        }
         if brain is not None:
             self.brain = brain
+            if brain.limits is None:
+                brain.limits = self.adjuster.limits
+            if brain.status_listener is None:
+                brain.status_listener = self._status_changed
         elif provider is not None:
             self.brain = AIBrain(settings, clock, provider=provider, deep_provider=provider, **common)
         else:
@@ -80,6 +98,37 @@ class AIFirstLayer:
         self.learning = LearningLoop(
             database, settings, clock, self.journal, brain=self.brain, adjuster=self.adjuster
         )
+
+    # -- owner controls / status ----------------------------------------------------------------
+    def fallback_mode(self) -> str:
+        return fallback_mode(self.database, self.settings)
+
+    def publish_status(self) -> dict:
+        mode = self.brain.mode
+        publish_ai_status(self.database, self.clock, mode=mode, detail="heartbeat")
+        return {"state": "published", "mode": mode, "fallback_mode": self.fallback_mode()}
+
+    def _status_changed(self, mode: str, detail: str) -> None:
+        try:
+            publish_ai_status(self.database, self.clock, mode=mode, detail=detail)
+        except Exception:
+            pass  # The 60 s heartbeat repairs it; a stale status already means owner defaults.
+        if self.alerts is not None:
+            if mode == "ai":
+                self.alerts.emit("WARNING", "AI Provider", "AI provider answering again; AI mode restored")
+            else:
+                fallback = self.fallback_mode()
+                self.alerts.emit(
+                    "ERROR",
+                    "AI Provider",
+                    "AI circuit open: " + detail[:80],
+                    details={"fallback_mode": fallback},
+                    action=(
+                        "New entries blocked until AI recovers (BLOCK_ON_AI_FAILURE)"
+                        if fallback == "BLOCK_ON_AI_FAILURE"
+                        else "Technical fallback active (TECHNICAL_ONLY)"
+                    ),
+                )
 
     # -- facts ----------------------------------------------------------------------------------
     def trades_today(self) -> int:
@@ -145,7 +194,8 @@ class AIFirstLayer:
         reply, model = await self.brain.review_config(snapshot)
         if reply is None:
             return {"state": "ai_unavailable", "synced": synced, "mode": self.brain.mode}
-        results = self.adjuster.apply_suggestion(reply)
+        context = {"regime": snapshot.regime, "news_risk": snapshot.news.get("risk", "high")}
+        results = self.adjuster.apply_suggestion(reply, context=context)
         self.journal.record(
             kind="config",
             source="ai",
@@ -175,7 +225,10 @@ class AIFirstLayer:
             )
         except (BrokerError, RiskViolation, ValueError, KeyError, TypeError):
             return {"state": "market_unavailable"}
-        return await self.learning.deep_review(snapshot)
+        result = await self.learning.deep_review(snapshot)
+        summary = self.adjuster.daily_summary_text()
+        self.notifier.summary(summary)
+        return {**result, "adjustment_summary": summary}
 
     async def close(self) -> None:
         await self.brain.close()

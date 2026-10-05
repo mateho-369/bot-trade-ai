@@ -2,12 +2,13 @@
 // No innerHTML, initDataUnsafe, cookie/storage auth, URL credentials or local owner fallback.
 (() => {
   const preview = document.documentElement.dataset.preview === "true";
-  const names = {dashboard: "Overview", positions: "Positions", trades: "Trade history", signals: "Signals", news: "News & calendar", suggestions: "AI supervisor", ai_journal: "AI journal", settings: "Settings", logs: "Audit trail"};
-  const endpoints = {dashboard: "dashboard", positions: "positions", trades: "trades", signals: "signals", news: "news", suggestions: "ai_suggestions", ai_journal: "ai_journal", settings: "settings", logs: "logs"};
-  const actions = new Set(["pause", "resume", "kill", "close_position", "close_all", "approve_suggestion", "reject_suggestion"]);
-  const state = {data: {}, section: "dashboard", verified: false, busy: false, pending: null, uncertain: false, curveRange: "day"};
+  const names = {dashboard: "Overview", positions: "Positions", trades: "Trade history", signals: "Signals", news: "News & calendar", suggestions: "AI supervisor", ai_journal: "AI journal", settings: "Settings", alerts: "Alerts", logs: "Audit trail"};
+  const endpoints = {dashboard: "dashboard", positions: "positions", trades: "trades", signals: "signals", news: "news", suggestions: "ai_suggestions", ai_journal: "ai_journal", settings: "settings", alerts: "alerts", logs: "logs"};
+  const actions = new Set(["pause", "resume", "kill", "close_position", "close_all", "approve_suggestion", "reject_suggestion", "ai_fallback", "ai_reset", "alerts/ack"]);
+  const state = {data: {}, section: "dashboard", verified: false, busy: false, pending: null, uncertain: false, curveRange: "day", alertLevel: ""};
   let signedInitData = ""; // Memory ONLY; never printed, persisted, echoed or refreshed by client time.
   let refreshTimer = null;
+  let alertTimer = null; // Alert Center: 30 s refresh, independent of the 20 s section refresh.
   let expiryTimer = null;
   const $ = (id) => document.getElementById(id);
   const put = (id, value) => { $(id).textContent = value; };
@@ -23,14 +24,15 @@
   function notice(message, bad = false) { const node = $("notice"); node.textContent = message; node.classList.toggle("error", bad); node.hidden = false; }
   function locked(message, expired = false) {
     state.verified = false; signedInitData = ""; put("owner-access-caption", "Backend-verified identity only"); state.data = {}; state.pending = null; state.busy = false;
-    clearInterval(refreshTimer); clearInterval(expiryTimer);
+    clearInterval(refreshTimer); clearInterval(expiryTimer); clearInterval(alertTimer);
     $("authenticated-view").hidden = true; $("locked-view").hidden = false;
     put("locked-title", expired ? "Your owner session expired." : "Your console stays private.");
     put("locked-description", message); put("session-label", expired ? "Reopen in Telegram" : "Not authenticated");
     $("mode-badge").replaceChildren(element("span"), document.createTextNode("LOCKED"));
     if ($("confirmation-dialog").open) $("confirmation-dialog").close();
     // Wipe previous sensitive projections, not just hide them until a future login.
-    for (const id of ["overview-positions", "positions-table", "trades-table", "signals-list", "news-list", "calendar-list", "overview-calendar", "suggestions-list", "ai-journal-list", "ai-adjustments-list", "settings-list", "logs-list", "equity-chart"]) $(id).replaceChildren();
+    for (const id of ["overview-positions", "positions-table", "trades-table", "signals-list", "news-list", "calendar-list", "overview-calendar", "suggestions-list", "ai-journal-list", "ai-adjustments-list", "settings-list", "logs-list", "alerts-list", "equity-chart"]) $(id).replaceChildren();
+    for (const id of ["ai-fallback-mode", "nav-alert-count", "alert-unack"]) put(id, "—");
     for (const id of ["balance-value", "equity-value", "today-value", "positions-value", "curve-value"]) put(id, "—");
     updateButtons();
   }
@@ -67,6 +69,8 @@
     const enabled = state.verified && !preview && !state.busy;
     const definitions = {"pause-button": enabled && caps.pause, "kill-button": enabled && caps.kill,
       "resume-button": enabled && caps.resume && !state.uncertain, "close-all-button": enabled && caps.close_owned && !state.uncertain};
+    const fallback = state.data.settings?.ai_fallback?.mode, unacknowledged = state.data.alerts?.unacknowledged || 0;
+    Object.assign(definitions, {"fallback-block-button": enabled && fallback !== "BLOCK_ON_AI_FAILURE", "fallback-technical-button": enabled && fallback !== "TECHNICAL_ONLY", "ai-reset-button": enabled, "ack-all-button": enabled && unacknowledged > 0});
     for (const [id, value] of Object.entries(definitions)) { $(id).disabled = !value; $(id).title = preview ? "Disabled: synthetic read-only UI fixture" : value ? "Fresh owner request; existing gates still apply" : "Owner/runtime capability unavailable"; }
     for (const node of document.querySelectorAll("[data-owner-action]")) node.disabled = !enabled || state.uncertain || node.dataset.eligible !== "true";
   }
@@ -139,10 +143,31 @@
   function renderSettings() { const holder = $("settings-list"), values = state.data.settings?.values || {}; holder.replaceChildren(); const labels = {max_risk_percent_per_trade: "Per-trade risk (%)", max_daily_loss_percent: "Daily loss limit (%)", max_drawdown_percent: "Drawdown limit (%)", target_net_profit_usd: "Net target (USD, not guaranteed)", min_daily_trades_target: "Activity target (never forced)", live_trading: "Live configured (not live approval)"}; for (const [key, value] of Object.entries(values)) { const row = element("div", "setting-row"); let rendered = Array.isArray(value) ? value.map((item) => Array.isArray(item) ? item.join(" → ") : item).join(" · ") : value && typeof value === "object" ? Object.entries(value).map(([k, v]) => human(k) + " " + v).join(" · ") : String(value); row.append(element("span", "", labels[key] || human(key)), element("span", "", rendered)); holder.append(row); } updateButtons(); }
   function renderLogs() { const holder = $("logs-list"), rows = state.data.logs?.items || []; if (!rows.length) return empty(holder, "No stored audit metadata."); holder.replaceChildren(); for (const data of rows) { const row = element("div", "record-row"), main = element("div", "record-main"); main.append(element("h3", "", data.action), element("p", "", data.source + " · record #" + data.id)); row.append(main, element("span", "small-label", time(data.time, true) + " UTC")); holder.append(row); } }
   function renderAIJournal() { const data = state.data.ai_journal || {}, holder = $("ai-journal-list"), rows = data.items || [], summary = data.summary || {}; put("ai-journal-summary", rows.length ? "AI " + (summary.ai_answers || 0) + " · RULE " + (summary.rule_fallbacks || 0) : "NO DECISIONS YET"); if (!rows.length) empty(holder, "No AI decisions recorded yet. Unknown is not approval."); else { holder.replaceChildren(); for (const item of rows) { const row = element("div", "record-row"), main = element("div", "record-main"); const where = (item.symbol || "") + (item.threshold ? " · lock " + item.threshold + "%" : ""); const confidence = item.confidence === null || item.confidence === undefined ? "–" : Math.round(item.confidence); main.append(element("h3", "", human(item.kind) + " · " + human(item.action) + " (" + confidence + ")" + (where ? " · " + where : "")), element("p", "", item.reason), element("p", "", "Source " + human(item.source) + " → " + human(item.final_action || item.rejection_reason || "recorded") + (item.outcome_usd ? " · result " + item.outcome_usd + " USD" : ""))); row.append(main, element("span", "small-label", time(item.time, true) + " UTC")); holder.append(row); } } const adjust = $("ai-adjustments-list"), changes = data.adjustments || []; if (!changes.length) return empty(adjust, "No AI configuration adjustments."); adjust.replaceChildren(); for (const change of changes) { const row = element("div", "record-row"), main = element("div", "record-main"); main.append(element("h3", "", human(change.parameter) + " → " + change.value), element("p", "", human(change.classification) + " · " + human(change.status) + (change.suggestion_id ? " · proposal #" + change.suggestion_id : ""))); row.append(main, element("span", "small-label", time(change.time, true) + " UTC")); adjust.append(row); } }
-  function renderSection(section) { ({dashboard: renderDashboard, positions: () => renderPositions($("positions-table"), state.data.positions?.items || []), trades: renderTrades, signals: renderSignals, news: renderNews, suggestions: renderSuggestions, ai_journal: renderAIJournal, settings: renderSettings, logs: renderLogs})[section](); }
+  function renderFallback() { const data = state.data.settings?.ai_fallback; if (!data) return; const limits = data.limits || {}, ai = data.ai || {}; put("ai-fallback-mode", data.mode === "TECHNICAL_ONLY" ? "TECHNICAL ONLY" : "BLOCK ON AI FAILURE"); put("ai-fallback-description", (data.description || "") + " · AI " + (ai.available ? "available" : "unavailable") + ". Risk checks, news block and kill switch always apply."); put("ai-limits-line", "Active limits (" + human(limits.source) + "): " + (limits.max_daily_trades ?? "—") + " trades/day · " + (limits.max_open_positions ?? "—") + " positions · risk " + (limits.risk_percent ?? "—") + "% · target " + (limits.target_usd ?? "—") + ". Hard caps 25 / 5 / 1.0% never change."); updateButtons(); }
+  function renderAlerts() {
+    const data = state.data.alerts || {}, holder = $("alerts-list"), rows = data.items || [], unacknowledged = data.unacknowledged || 0;
+    put("nav-alert-count", unacknowledged); put("alert-unack", unacknowledged + " unacknowledged");
+    for (const node of document.querySelectorAll("[data-alert-level]")) node.classList.toggle("selected", node.dataset.alertLevel === state.alertLevel);
+    if (!rows.length) { empty(holder, state.alertLevel ? "No " + state.alertLevel + " alerts stored." : "No alerts stored."); updateButtons(); return; }
+    holder.replaceChildren();
+    for (const data of rows) {
+      const row = element("div", "record-row alert-row level-" + data.level + (data.acknowledged ? " acked" : "")), main = element("div", "record-main"), meta = element("div", "record-meta");
+      main.append(element("h3", "", data.component + ": " + data.message), element("p", "", data.action ? "Action: " + data.action : "No action required"));
+      meta.append(element("span", "alert-level level-" + data.level, data.level), element("span", "", time(data.timestamp, true) + " UTC"));
+      if (data.repeat_count > 1) meta.append(element("span", "", "Repeated x" + data.repeat_count));
+      meta.append(element("span", "", "Telegram: " + human(data.telegram_status)));
+      main.append(meta);
+      const side = element("div", "inline-actions");
+      if (data.acknowledged) side.append(element("span", "small-label", "Acknowledged"));
+      else { const button = element("button", "button button-muted", "Acknowledge"); button.dataset.ownerAction = "alerts/ack"; button.dataset.eligible = "true"; button.onclick = () => runAction("alerts/ack", {alert_id: data.id}); side.append(button); }
+      row.append(main, side); holder.append(row);
+    }
+    updateButtons();
+  }
+  function renderSection(section) { ({dashboard: renderDashboard, positions: () => renderPositions($("positions-table"), state.data.positions?.items || []), trades: renderTrades, signals: renderSignals, news: renderNews, suggestions: renderSuggestions, ai_journal: renderAIJournal, settings: () => { renderSettings(); renderFallback(); }, alerts: renderAlerts, logs: renderLogs})[section](); }
 
-  async function load(section) { if (!preview) state.data[section] = await api(endpoints[section]); renderSection(section); if (section !== "dashboard" && state.data.dashboard) renderDashboard(); }
-  async function navigate(section) { if (!Object.hasOwn(names, section)) return; state.section = section; for (const node of document.querySelectorAll("[data-section]")) node.classList.toggle("active", node.dataset.section === section); for (const key of Object.keys(names)) $("view-" + key).hidden = key !== section; put("breadcrumb-title", names[section]); const titles = {dashboard: "Trading overview", positions: "Position control", trades: "Trade history", signals: "Signal decisions", news: "News & calendar", suggestions: "AI supervisor", ai_journal: "AI decision journal", settings: "Your safety settings", logs: "Every decision, recorded"}; $("page-title").replaceChildren(document.createTextNode(titles[section]), element("span", "", ".")); put("page-subtitle", section === "dashboard" ? "Quality over activity. Protection before profit." : "Owner-only. Bounded observations. No permission implied by a score or page."); $("sidebar").classList.remove("open"); $("menu-toggle").setAttribute("aria-expanded", "false"); if (state.verified || preview) { try { await load(section); } catch (error) { notice("Stored-data request denied: " + human(error.message) + ".", true); } } }
+  async function load(section) { if (!preview) state.data[section] = await api(section === "alerts" && state.alertLevel ? "alerts?level=" + state.alertLevel : endpoints[section]); renderSection(section); if (section !== "dashboard" && state.data.dashboard) renderDashboard(); }
+  async function navigate(section) { if (!Object.hasOwn(names, section)) return; state.section = section; for (const node of document.querySelectorAll("[data-section]")) node.classList.toggle("active", node.dataset.section === section); for (const key of Object.keys(names)) $("view-" + key).hidden = key !== section; put("breadcrumb-title", names[section]); const titles = {dashboard: "Trading overview", positions: "Position control", trades: "Trade history", signals: "Signal decisions", news: "News & calendar", suggestions: "AI supervisor", ai_journal: "AI decision journal", settings: "Your safety settings", alerts: "Alert Center", logs: "Every decision, recorded"}; $("page-title").replaceChildren(document.createTextNode(titles[section]), element("span", "", ".")); put("page-subtitle", section === "dashboard" ? "Quality over activity. Protection before profit." : "Owner-only. Bounded observations. No permission implied by a score or page."); $("sidebar").classList.remove("open"); $("menu-toggle").setAttribute("aria-expanded", "false"); if (state.verified || preview) { try { await load(section); } catch (error) { notice("Stored-data request denied: " + human(error.message) + ".", true); } } }
 
   function outcome(result) { const bad = result.status === "uncertain" || result.status === "rejected"; if (result.status === "uncertain") state.uncertain = true; notice("Owner action " + result.status + ": " + (result.message || human(result.reason) || "Decision recorded only.") + (result.replayed ? " Cached outcome — not a new execution." : ""), bad); updateButtons(); }
   function openConfirmation(result, action, parameters, requestId) {
@@ -156,7 +181,7 @@
     if (!actions.has(action) || preview || !state.verified || state.busy || (state.uncertain && !["pause", "kill"].includes(action))) return;
     if (!window.crypto?.randomUUID) { notice("Secure request identifiers are unavailable. Use the HTTPS Telegram Mini App.", true); return; }
     state.busy = true; updateButtons(); const requestId = crypto.randomUUID();
-    try { const result = await api(action, {request_id: requestId, ...parameters}); if (result.status === "confirmation_required") openConfirmation(result, action, parameters, requestId); else { outcome(result); await load("dashboard"); } }
+    try { const result = await api(action, {request_id: requestId, ...parameters}); if (result.status === "confirmation_required") openConfirmation(result, action, parameters, requestId); else { outcome(result); await load("dashboard"); if (state.section !== "dashboard") await load(state.section); } }
     catch (error) { if (error.message.includes("uncertain") || error.message.includes("unknown")) state.uncertain = true; notice("Owner action denied / unknown: " + human(error.message) + ". Do not blindly retry a possibly committed action.", true); }
     finally { state.busy = false; updateButtons(); }
   }
@@ -178,6 +203,10 @@
   $("menu-toggle").onclick = toggleMenu; $("mobile-more").onclick = toggleMenu;
   $("refresh-button").onclick = async () => { if (!state.verified && !preview) return; try { await load("dashboard"); await load(state.section); } catch { notice("Stored data is unavailable. Unknown is not clearance.", true); } };
   $("pause-button").onclick = () => runAction("pause"); $("resume-button").onclick = () => runAction("resume"); $("kill-button").onclick = () => runAction("kill"); $("close-all-button").onclick = () => runAction("close_all");
+  $("fallback-block-button").onclick = () => runAction("ai_fallback", {mode: "BLOCK_ON_AI_FAILURE"});
+  $("fallback-technical-button").onclick = () => runAction("ai_fallback", {mode: "TECHNICAL_ONLY"});
+  $("ai-reset-button").onclick = () => runAction("ai_reset"); $("ack-all-button").onclick = () => runAction("alerts/ack");
+  for (const node of document.querySelectorAll("[data-alert-level]")) node.onclick = async () => { state.alertLevel = node.dataset.alertLevel; if (preview) { renderAlerts(); return; } try { await load("alerts"); } catch { notice("Stored alerts are unavailable.", true); } };
   $("cancel-confirmation").onclick = cancelConfirmation; $("confirm-action").onclick = confirmAction; $("confirmation-check").onchange = () => { $("confirm-action").disabled = !state.pending || state.busy || !$("confirmation-check").checked || Date.now() >= state.pending.expires; };
   $("confirmation-dialog").addEventListener("cancel", (event) => { event.preventDefault(); cancelConfirmation(); });
   for (const node of document.querySelectorAll("[data-curve-range]")) node.onclick = () => { state.curveRange = node.dataset.curveRange; for (const button of document.querySelectorAll("[data-curve-range]")) button.classList.toggle("selected", button === node); renderCurve(state.data.dashboard?.equity_curve || []); };
@@ -202,7 +231,9 @@
       $("locked-view").hidden = true; $("authenticated-view").hidden = false; put("session-label", "Verified by backend"); put("owner-access-caption", "Verified Telegram owner");
       for (const section of ["settings", "positions", "news", "suggestions"]) await load(section);
       renderDashboard(); await navigate("dashboard");
-      clearInterval(refreshTimer); refreshTimer = setInterval(async () => { if (!state.verified || document.hidden || state.busy || state.pending) return; try { await load(state.section); } catch { notice("Current stored data is unavailable; no trading clearance is inferred.", true); } }, 20000);
+      clearInterval(refreshTimer); refreshTimer = setInterval(async () => { if (!state.verified || document.hidden || state.busy || state.pending) return; try { if (state.section !== "alerts") await load(state.section); } catch { notice("Current stored data is unavailable; no trading clearance is inferred.", true); } }, 20000);
+      try { await load("alerts"); } catch { put("nav-alert-count", "?"); }
+      clearInterval(alertTimer); alertTimer = setInterval(async () => { if (!state.verified || document.hidden || state.busy || state.pending) return; try { await load("alerts"); } catch { put("nav-alert-count", "?"); } }, 30000);
     } catch { if (state.verified) locked("Owner authentication or the guarded service is unavailable. Reopen from Telegram; there is no client-created session renewal."); }
   }
   if (preview) boot();
