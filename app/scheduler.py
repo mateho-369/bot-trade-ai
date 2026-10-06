@@ -122,7 +122,10 @@ class RuntimeScheduler:
     async def failed(self, name, *, cancelled=False, error=None):
         r = self.resources
         explicit = getattr(r, "alerts", None) is not None
-        LOG.error("Runtime job unavailable: %s; raw exception suppressed", name, extra={"alerted": explicit})
+        detail = f"{type(error).__name__}: {error}"[:200] if error is not None else "no exception captured"
+        LOG.error(
+            "Runtime job unavailable: %s (%s)", name, detail, extra={"alerted": explicit}
+        )
         critical_path = name in {"heartbeat", "positions", "signals", "position_reviews"}
         connection = isinstance(error, (BrokerError, ConnectionError, OSError, TimeoutError))
         if critical_path and connection:

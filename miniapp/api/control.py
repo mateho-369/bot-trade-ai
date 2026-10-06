@@ -22,6 +22,11 @@ async def kill(request: Request, body: DirectRequest, identity: Actor):
     return await services(request).action(identity, "kill", {}, body.request_id)
 
 
+@router.post("/acknowledge_recovery")
+async def acknowledge_recovery(request: Request, body: DirectRequest, identity: Actor):
+    return await services(request).action(identity, "acknowledge_recovery", {}, body.request_id)
+
+
 @router.post("/resume")
 async def resume(request: Request, body: ConfirmationRequest, identity: Actor):
     return await services(request).action(identity, "resume", {}, body.request_id, body.confirmation_token)

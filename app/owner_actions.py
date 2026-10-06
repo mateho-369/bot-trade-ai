@@ -25,6 +25,7 @@ CONFIRMED_ACTIONS = {"resume", "close_position", "close_all", "approve_suggestio
 DIRECT_ACTIONS = {
     "pause",
     "kill",
+    "acknowledge_recovery",
     "reject_suggestion",
     "ai_reset",
     "ai_fallback_block",

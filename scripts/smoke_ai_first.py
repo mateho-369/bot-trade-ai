@@ -286,6 +286,10 @@ async def run(provider_name: str) -> dict:
                 checks["close_now_at_60_kept_locked_profit"] = (
                     trade.status == "closed" and Decimal(trade.profit_usd) > 0
                 )
+            elif provider_name == "groq":
+                # Groq mode trails with the ScriptedProvider brain, so the journal
+                # source is "ai"; the mechanical path belongs to outage (--provider rule).
+                checks["scripted_trailing_executed"] = bool(trailing) and all(row[1] == "ai" for row in trailing)
             else:
                 checks["mechanical_fallback"] = all(row[1] == "mechanical" for row in trailing)
             try:

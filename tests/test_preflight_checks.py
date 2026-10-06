@@ -58,7 +58,7 @@ def test_runtime_observed_without_touching_native_or_environment(monkeypatch):
     findings, observed = inspect_runtime()
     assert codes({"findings": list(findings)})["python_runtime_observed"] == "passed"
     assert observed["interpreter_bits"] == 64 and observed["platform"] == sys.platform
-    assert observed["windows"] is False and "MetaTrader5" not in sys.modules
+    assert observed["windows"] is (sys.platform == "win32") and "MetaTrader5" not in sys.modules
 
 
 @pytest.mark.parametrize("version", [(3, 10, 11), (3, 9, 0)])

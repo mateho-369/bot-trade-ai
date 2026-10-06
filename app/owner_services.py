@@ -185,6 +185,7 @@ class OwnerServices:
                 "resume": self.execution is not None,
                 "close_owned": self.execution is not None,
                 "decide_proposal": self.suggestions is not None,
+                "acknowledge_recovery": self.execution is not None,
                 "open_orders": False,
                 "enable_live": False,
                 "apply_proposals": False,
@@ -523,6 +524,35 @@ class OwnerServices:
                 if action == "pause"
                 else "Kill latch set; no new entries. This does not flatten the broker account.",
                 "effect_applied": True,
+            }
+        if action == "acknowledge_recovery":
+            # Owner reviewed the recorded halt. Clears last_error and stays PAUSED;
+            # resume remains a separate fully-gated confirmation.
+            quarantined = (
+                self.execution is not None
+                and self.execution.broker.health().get("writes_quarantined") is True
+            )
+            await durable_call(
+                self.control.acknowledge_recovery,
+                actor.owner_id,
+                account_key=self.execution.account_key,
+                broker_writes_quarantined=quarantined,
+            )
+            # The designed flat-baseline review: refuses unless the ledger is proven
+            # flat with fresh complete history (raises TradingDisabled otherwise).
+            await durable_call(
+                self.control.review_flat_baseline,
+                actor.owner_id,
+                account_key=self.execution.account_key,
+                confirm="REVIEW_SAMPLED_BASELINE",
+            )
+            return {
+                "status": "completed",
+                "effect_applied": True,
+                "message": (
+                    "Recovery reviewed; halt and observation gap cleared on the flat baseline. "
+                    "Entries stay PAUSED until a fresh gated resume."
+                ),
             }
         if action == "ai_reset":
             from ai.config_adjuster import revert_all

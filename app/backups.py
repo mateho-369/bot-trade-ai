@@ -40,8 +40,12 @@ def database_path(settings):
 
 def _snapshot(source, target):
     # SQLite backup API includes committed WAL state, unlike copying *.db alone.
-    with sqlite3.connect(source.as_uri() + "?mode=ro", uri=True, timeout=10) as src:
-        with sqlite3.connect(target) as dst:
+    # Connections are closed explicitly: sqlite3's context manager only commits,
+    # it never closes, and a leaked handle makes the temp snapshot undeletable on Windows.
+    src = sqlite3.connect(source.as_uri() + "?mode=ro", uri=True, timeout=10)
+    try:
+        dst = sqlite3.connect(target)
+        try:
             started = time.monotonic()
             page_size = src.execute("PRAGMA page_size").fetchone()[0]
 
@@ -52,6 +56,10 @@ def _snapshot(source, target):
             src.backup(dst, pages=128, sleep=0.05, progress=progress)
             if dst.execute("PRAGMA quick_check").fetchall() != [("ok",)]:
                 raise ValueError("SQLite snapshot integrity check failed")
+        finally:
+            dst.close()
+    finally:
+        src.close()
 
 
 def _artifact_paths(settings):
@@ -142,8 +150,13 @@ def _build(settings, database, *, coherent):
         with zipfile.ZipFile(archive) as check:
             if check.testzip() is not None:
                 raise ValueError("backup ZIP CRC failed")
-        with archive.open("rb") as handle:
-            os.fsync(handle.fileno())
+        # Flush the archive before publication. fsync needs a writable handle on
+        # Windows (_commit fails with EBADF on read-only descriptors).
+        fd = os.open(archive, os.O_RDWR)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
         os.chmod(archive, 0o600)
         # Unique names, publication only after complete ZIP and CRC verification.
         os.replace(archive, final)

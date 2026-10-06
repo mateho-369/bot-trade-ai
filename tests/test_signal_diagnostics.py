@@ -35,6 +35,12 @@ async def test_diagnostic_ignores_host_modes_credentials_and_cleans_temp_state(t
 def test_cli_is_synthetic_only_with_explicit_warning():
     root = Path(__file__).resolve().parents[1]
     env = {"PATH": os.environ.get("PATH", ""), "HOME": os.environ.get("HOME", "/home/user")}
+    if sys.platform == "win32":
+        # Winsock cannot initialize without these; none of them carry trading flags.
+        for name in ("SYSTEMROOT", "SYSTEMDRIVE", "COMSPEC", "TEMP", "TMP"):
+            value = os.environ.get(name)
+            if value:
+                env[name] = value
     command = subprocess.run(
         [sys.executable, "-m", "scripts.smoke_signals"],
         cwd=root,

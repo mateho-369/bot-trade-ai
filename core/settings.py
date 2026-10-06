@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import os
 import re
 from decimal import Decimal
 from enum import StrEnum
@@ -1070,6 +1071,25 @@ class Settings(BaseSettings):
     def resolve_path(self, path: str | Path) -> Path:
         root = self.project_root.resolve()
         candidate = (root / Path(path)).resolve()
+        if os.name == "nt":
+
+            def _strip_extended(text: str) -> str:
+                # Windows Path.resolve() intermittently returns the extended-length
+                # prefix (\\?\) under concurrent parent creation. Strip it so one
+                # real path always has one spelling; containment is unchanged.
+                if text.startswith("\\\\?\\UNC\\"):
+                    return "\\\\" + text[8:]
+                if text.startswith("\\\\?\\"):
+                    return text[4:]
+                return text
+
+            normalized_root = _strip_extended(str(root)).casefold()
+            normalized_candidate = _strip_extended(str(candidate)).casefold()
+            if normalized_candidate != normalized_root and not normalized_candidate.startswith(
+                normalized_root + os.sep
+            ):
+                raise ValueError("runtime paths must remain inside the project directory")
+            return Path(_strip_extended(str(candidate)))
         if not candidate.is_relative_to(root):
             raise ValueError("runtime paths must remain inside the project directory")
         return candidate

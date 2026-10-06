@@ -27,6 +27,22 @@ def artifact_path(settings: Settings, digest: str, *, category: str = "models") 
         if cursor.is_symlink():
             raise TradingDisabled("symlink artifact paths are forbidden")
     path = settings.resolve_path(relative)
+    if os.name == "nt":
+        # Windows Path.resolve() can emit the extended-length prefix (\\?\) under
+        # concurrent parent creation; compare normalized so a path genuinely inside
+        # the project is never falsely rejected. Containment itself is unchanged.
+        def _normalize(text: str) -> str:
+            if text.startswith("\\\\?\\UNC\\"):
+                text = "\\\\" + text[8:]
+            elif text.startswith("\\\\?\\"):
+                text = text[4:]
+            return text.casefold()
+
+        normalized = _normalize(str(path))
+        normalized_root = _normalize(str(root))
+        if normalized != normalized_root and not normalized.startswith(normalized_root + os.sep):
+            raise TradingDisabled("artifact path escaped project")
+        return path
     if not path.is_relative_to(root):
         raise TradingDisabled("artifact path escaped project")
     return path

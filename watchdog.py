@@ -158,11 +158,29 @@ class Watchdog:
 
     def health_ok(self):
         data = read_json(self.settings.resolve_path(self.settings.runtime_health_file))
+        pid = data.get("pid")
+        pid_ok = pid == self.child.pid
+        if not pid_ok and type(pid) is int:
+            # Windows venv launchers spawn the real interpreter as a child of the
+            # spawned process, so os.getpid() inside the runtime differs from
+            # Popen.pid. Accept the health file of the interpreter this supervisor
+            # actually spawned; managed_id still binds it to THIS launch.
+            try:
+                pid_ok = self.child.pid in (p.pid for p in psutil.Process(pid).parents())
+            except psutil.Error:
+                pid_ok = False
+        created_ok = False
+        if type(data.get("process_created")) is float and type(pid) is int:
+            try:
+                # Bind the file to a LIVE process with that exact creation time;
+                # a stale file from a dead/replaced pid fails closed here.
+                created_ok = psutil.Process(pid).create_time() == data["process_created"]
+            except psutil.Error:
+                created_ok = False
         if (
-            type(data.get("pid")) is not int
-            or data["pid"] != self.child.pid
+            not pid_ok
+            or not created_ok
             or data.get("managed_id") != self.identity
-            or data.get("process_created") != self.created
             or data.get("config_hash") != self.settings.safety_fingerprint()
             or data.get("not_live_authorization") is not True
             or type(data.get("schema")) is not int

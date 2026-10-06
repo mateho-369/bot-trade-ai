@@ -69,7 +69,18 @@ def atomic_json(path: Path, data: dict):
             out.write(canonical_json(data))
             out.flush()
             os.fsync(out.fileno())
-        os.replace(name, path)
+        for attempt in range(3):
+            try:
+                os.replace(name, path)
+                break
+            except PermissionError:
+                # Windows readers hold the target without FILE_SHARE_DELETE for the
+                # microseconds of a bounded read; retry briefly, then fail closed.
+                import time
+
+                if attempt == 2:
+                    raise
+                time.sleep(0.05 * (attempt + 1))
     finally:
         Path(name).unlink(missing_ok=True)
 

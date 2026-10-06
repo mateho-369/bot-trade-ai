@@ -4,6 +4,7 @@ Offline only: an in-process fake Telegram bot, mock broker, no network, no order
 """
 
 import logging
+import os
 from datetime import timedelta
 from logging.handlers import RotatingFileHandler
 
@@ -341,7 +342,7 @@ def test_bot_errors_and_ai_decision_logs_rotate_at_5mb_with_6_files(tmp_path):
     try:
         configure_logging(settings)
         handlers = [h for h in root.handlers if isinstance(h, RotatingFileHandler)]
-        names = sorted(h.baseFilename.rsplit("/", 1)[-1] for h in handlers)
+        names = sorted(os.path.basename(h.baseFilename) for h in handlers)
         assert names == sorted(["bot.log", ERROR_LOG_NAME, AI_LOG_NAME])
         assert all(h.maxBytes == 5 * 1024 * 1024 and h.backupCount == 5 for h in handlers)  # 1 + 5 files.
         logging.getLogger("ai.brain").info("AI decision kind=entry symbol=EURUSD action=wait")

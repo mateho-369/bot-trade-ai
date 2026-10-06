@@ -77,6 +77,11 @@ def checked_path(path: Path, *, root: Path | None = None, missing: bool = False)
 
 
 def identity(info):
+    if os.name == "nt":
+        # Windows st_ctime_ns is the creation time; NTFS refines it after the first open,
+        # so lstat and fstat can differ by a few milliseconds with no real mutation.
+        # Change detection stays intact via dev/ino/size/mtime.
+        return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns)
     return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
 
 

@@ -86,6 +86,33 @@ def test_launch_is_shell_free_direct_child_and_never_resume(system):
     assert len(system.children) == 1 and system.d.status()["state"] == "paused"
 
 
+def test_health_from_spawned_interpreter_descendant_accepted_unrelated_refused(system):
+    # Windows venv launchers spawn the real interpreter as a child of the spawned
+    # process: Popen.pid != os.getpid() inside the runtime. The health file then
+    # carries the interpreter pid; the supervisor must still bind it to this launch.
+    import subprocess
+    import sys
+
+    import psutil
+
+    w = system.w
+    w.tick()
+    assert w.child is not None
+    interpreter = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(10)"])
+    try:
+        assert interpreter.pid != w.child.pid
+        assert w.child.pid in (p.pid for p in psutil.Process(interpreter.pid).parents())
+        health(system, pid=interpreter.pid, process_created=psutil.Process(interpreter.pid).create_time())
+        assert w.health_ok() is True
+        # An unrelated live process (not a descendant of the spawned pid) stays refused.
+        unrelated = psutil.Process(os.getpid()).ppid()
+        health(system, pid=unrelated, process_created=psutil.Process(unrelated).create_time())
+        assert w.health_ok() is False
+    finally:
+        interpreter.kill()
+        interpreter.wait()
+
+
 def test_startup_grace_is_bounded_not_a_restart_permission(system):
     w = system.w
     w.tick()

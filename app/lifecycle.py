@@ -146,8 +146,14 @@ class RuntimeLifecycle:
                         await durable_call(r.engine.control.heartbeat)
                         last_renewal = time.monotonic()
                 await durable_call(self.health.write)
-            except Exception:
-                LOG.error("Runtime health/storage unavailable; graceful stop requested")
+            except Exception as error:
+                # Surface the failure kind for diagnosis; storage errors carry no
+                # credentials, but never dump tracebacks or raw broker payloads.
+                LOG.error(
+                    "Runtime health/storage unavailable; graceful stop requested (%s: %s)",
+                    type(error).__name__,
+                    str(error)[:200],
+                )
                 self.stop_event.set()
             await asyncio.sleep(1)
 
