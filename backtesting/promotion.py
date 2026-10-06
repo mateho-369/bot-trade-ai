@@ -1,9 +1,9 @@
-"""Owner-authenticated stage artifact import + ledger-derived paper/demo exports.
+"""Local-operator stage artifact review + ledger-derived paper/demo exports.
 
 Research replay output is NEVER relabeled or inserted as promotion evidence.
 These trusted local functions instantiate no broker/provider/daemon. A native-source
 label is not independently authenticated: the existing intent/deal/coverage proofs
-are rechecked by StageGate, and the owner must review data provenance separately.
+are rechecked by StageGate, and the local operator must review data provenance separately.
 """
 
 from __future__ import annotations
@@ -20,10 +20,10 @@ from backtesting.artifacts import write_json
 from backtesting.contracts import utc_time
 from backtesting.dataset import file_bytes, strict_json_bytes
 from backtesting.metrics import EquityPoint, summarize
+from core.local_operator import LocalOperator
 from core.models import AccountSnapshot, BotState, BrokerDeal, DeploymentEvidence, OrderIntent, Trade
 from core.security import sha256_json
 from core.settings import OperatingMode
-from telegram_bot.miniapp_auth import validate_init_data
 from trading.risk_types import RuntimeProfile
 from trading.stage_gate import StageGate
 from trading.types import ZERO, SourceKind, TradingDisabled, valid_key
@@ -40,7 +40,7 @@ def native_profile(database, settings, clock):
     return profile
 
 
-def evidence_from(report, *, path, digest, owner_id, created_at):
+def evidence_from(report, *, path, digest, operator_id, created_at):
     try:
         if report["format"] != "reflex-stage-v1" or report["stage"] not in {"backtest", "paper", "demo"}:
             raise ValueError
@@ -64,7 +64,7 @@ def evidence_from(report, *, path, digest, owner_id, created_at):
             metrics_json=report["metrics"],
             artifact_path=str(path),
             artifact_sha256=digest,
-            owner_reviewed_by=owner_id,
+            owner_reviewed_by=operator_id,
             passed=True,
             revoked=False,
         )
@@ -75,10 +75,13 @@ def evidence_from(report, *, path, digest, owner_id, created_at):
 
 
 def import_reviewed_stage(
-    database, settings, clock, *, report_path: Path, confirm_sha256: str, owner_init_data: str
+    database, settings, clock, *, report_path: Path, confirm_sha256: str, operator: LocalOperator
 ) -> int:
-    """Fresh signed owner identity + literal file digest + stopped/flat state; append evidence only."""
-    identity = validate_init_data(owner_init_data, settings, clock)
+    """Current local operator + literal file digest + stopped/flat state; append evidence only."""
+    if not isinstance(operator, LocalOperator):
+        raise TradingDisabled("current local operator required")
+    operator.require_current()
+    operator_id = operator.operator_id
     valid_key(confirm_sha256)
     path = Path(report_path)
     if not path.is_absolute():
@@ -86,11 +89,11 @@ def import_reviewed_stage(
     raw = file_bytes(path, root=settings.project_root, limit=1048576)
     digest = hashlib.sha256(raw).hexdigest()
     if digest != confirm_sha256:
-        raise TradingDisabled("owner confirmation does not match the stage file bytes")
+        raise TradingDisabled("local review does not match the stage file bytes")
     report = strict_json_bytes(raw, limit=1048576)
     relative = path.absolute().relative_to(settings.project_root.resolve())
     evidence = evidence_from(
-        report, path=relative, digest=digest, owner_id=identity.owner_id, created_at=clock.now()
+        report, path=relative, digest=digest, operator_id=operator_id, created_at=clock.now()
     )
     profile = native_profile(database, settings, clock)
     if evidence.stage == "backtest":
@@ -120,7 +123,7 @@ def import_reviewed_stage(
             select(DeploymentEvidence).where(
                 DeploymentEvidence.artifact_sha256 == digest,
                 DeploymentEvidence.stage == evidence.stage,
-                DeploymentEvidence.owner_reviewed_by == identity.owner_id,
+                DeploymentEvidence.owner_reviewed_by == operator_id,
                 DeploymentEvidence.passed.is_(True),
                 DeploymentEvidence.revoked.is_(False),
             )
@@ -131,14 +134,14 @@ def import_reviewed_stage(
         session.flush()
         database.add_audit(
             session,
-            "owner.stage_evidence_reviewed",
-            "owner",
+            "local_operator.stage_evidence_reviewed",
+            "local_operator",
             {
                 "stage": evidence.stage,
                 "evidence_id": evidence.id,
                 "report_sha256": digest,
-                "owner_id": identity.owner_id,
-                "authentication": "fresh_telegram_initdata_hmac",
+                "operator_id": operator_id,
+                "authentication": "current_local_operator",
                 "grants_resume": False,
                 "grants_live": False,
             },
@@ -157,7 +160,7 @@ def export_ledger_stage(
     finished_at: datetime,
     output: Path,
 ):
-    """Export qualifying native paper/demo ledgers; not owner approval or live permission."""
+    """Export qualifying native paper/demo ledgers; not local approval or live permission."""
     if stage not in {"paper", "demo"} or not isinstance(account_key, str) or len(account_key) > 160:
         raise TradingDisabled("paper/demo and an exact private account scope are required")
     start, end = utc_time(started_at), utc_time(finished_at)
@@ -249,7 +252,7 @@ def export_ledger_stage(
                     "equity": [point.to_dict() for point in points],
                 }
             ),
-            "owner_review_required": True,
+            "local_operator_review_required": True,
             "grants_live": False,
             "grants_resume": False,
         }
@@ -257,7 +260,7 @@ def export_ledger_stage(
             report,
             path="unused-export.json",
             digest="0" * 64,
-            owner_id=settings.telegram_owner_id,
+            operator_id=LocalOperator.current().operator_id,
             created_at=clock.now(),
         )
         gate = StageGate(database, settings, clock, profile)
@@ -285,7 +288,7 @@ def export_ledger_stage(
     return {
         "path": str(output.relative_to(settings.project_root.resolve())),
         **info,
-        "owner_review_required": True,
+        "local_operator_review_required": True,
         "evidence_inserted": False,
         "live_enabled": False,
     }

@@ -15,7 +15,7 @@ from trading.types import ManualClock, TradingDisabled
 
 
 async def test_factory_constructs_without_login_provider_poll_or_control_claim(tmp_path):
-    cfg = config(tmp_path, runtime_telegram_enabled=False)
+    cfg = config(tmp_path)
     db = Database(cfg)
     db.initialize()
     broker = MockMT5Client(cfg, clock=ManualClock(MOMENT))
@@ -23,7 +23,7 @@ async def test_factory_constructs_without_login_provider_poll_or_control_claim(t
     try:
         assert not r.engine._initialized and not r.news._initialized and not r.supervisor._initialized
         assert not r.signals._initialized and not broker.health()["connected"]
-        assert r.engine.control.session_id is None and r.telegram is None
+        assert r.engine.control.session_id is None and r.reporter is not None and not r.reporter.enabled
         with db.session() as sql:
             assert sql.scalar(select(AuditLog.id).where(AuditLog.action == "runtime.claimed_paused")) is None
     finally:
@@ -67,9 +67,7 @@ def test_existing_db_requirement_does_not_create_financial_state(tmp_path, url):
 
 
 async def test_daemon_refuses_missing_db_before_factory_or_empty_sqlite_creation(tmp_path):
-    cfg = Settings(
-        _env_file=None, project_root=tmp_path, runtime_api_enabled=False, runtime_telegram_enabled=False
-    )
+    cfg = Settings(_env_file=None, project_root=tmp_path)
     calls = []
 
     def fail_if_called(*args):
@@ -89,16 +87,11 @@ async def test_daemon_refuses_missing_db_before_factory_or_empty_sqlite_creation
         ("LIVE_TRADING", "true"),
         ("MT5_BACKEND", "real"),
         ("PAPER_TRADING", "false"),
-        ("RUNTIME_TELEGRAM_ENABLED", "true"),
-        ("RUNTIME_API_ENABLED", "true"),
         ("TELEGRAM_BOT_TOKEN", "DO_NOT_CONTACT_ANYTHING"),
     ],
 )
 def test_runtime_smoke_ignores_inherited_environment(monkeypatch, tmp_path, key, value):
     monkeypatch.setenv(key, value)
-    cfg = OfflineRuntimeSettings(
-        _env_file=None, project_root=tmp_path, runtime_api_enabled=False, runtime_telegram_enabled=False
-    )
+    cfg = OfflineRuntimeSettings(_env_file=None, project_root=tmp_path)
     assert cfg.paper_trading and not cfg.live_trading and cfg.mt5_backend == "mock"
     assert not cfg.telegram_bot_token.get_secret_value()
-    assert not cfg.runtime_telegram_enabled and not cfg.runtime_api_enabled

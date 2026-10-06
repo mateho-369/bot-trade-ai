@@ -1,4 +1,4 @@
-"""One-worker bounded scheduling of real services, never automatic owner resume.
+"""One-worker bounded scheduling of real services, never automatic local-operator resume.
 
 Jobs coalesce missed runs; they do not catch up orders. Overdue tasks are NOT
 cancelled/replaced: native writes may still be running. Shutdown drains them.
@@ -12,12 +12,10 @@ from datetime import timedelta
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-from app.alerts import resolve_older_than
 from app.async_tools import durable_call
 from app.backups import create_backup, prune_db_snapshots
 from app.process_guard import operator_stop_requested
 from core.models import BotState
-from telegram_bot.notifications import OwnerNewsNotifier
 from trading.risk_types import RuntimeProfile
 from trading.types import BrokerError, TradingDisabled
 
@@ -25,9 +23,10 @@ LOG = logging.getLogger("reflexbot.scheduler")
 
 
 class RuntimeScheduler:
-    def __init__(self, resources, health, *, scheduler=None):
+    def __init__(self, resources, health, *, scheduler=None, auto_resume=None):
         self.resources, self.health = resources, health
         self.settings = resources.settings
+        self.auto_resume = auto_resume
         self.scheduler = scheduler or AsyncIOScheduler(
             timezone="UTC", job_defaults={"max_instances": 1, "coalesce": True, "misfire_grace_time": 5}
         )
@@ -54,6 +53,7 @@ class RuntimeScheduler:
             "ai_attribution": self.ai_attribution,
             "trade_audit": self.trade_audit,
             "alerts": self.alerts,
+            "autonomous_retry": self.autonomous_retry,
         }
 
     def control_state(self):
@@ -122,10 +122,8 @@ class RuntimeScheduler:
     async def failed(self, name, *, cancelled=False, error=None):
         r = self.resources
         explicit = getattr(r, "alerts", None) is not None
-        detail = f"{type(error).__name__}: {error}"[:200] if error is not None else "no exception captured"
-        LOG.error(
-            "Runtime job unavailable: %s (%s)", name, detail, extra={"alerted": explicit}
-        )
+        error_kind = type(error).__name__ if error is not None else "not_captured"
+        LOG.error("Runtime job unavailable: %s (%s)", name, error_kind, extra={"alerted": explicit})
         critical_path = name in {"heartbeat", "positions", "signals", "position_reviews"}
         connection = isinstance(error, (BrokerError, ConnectionError, OSError, TimeoutError))
         if critical_path and connection:
@@ -270,15 +268,10 @@ class RuntimeScheduler:
 
     async def notifications(self):
         r = self.resources
-        if r.telegram is None:
-            return {"state": "no_transport"}
-        result = {
-            "runtime": await r.notices.drain(r.telegram),
-            "news": await OwnerNewsNotifier(r.telegram, r.news.alerts).drain(),
+        return {
+            "runtime": await r.notices.drain(),
+            "news": await r.news.alerts.drain(r.reporter),
         }
-        if getattr(r, "ai_first", None) is not None:
-            result["ai"] = await r.ai_first.notifier.drain(getattr(r.telegram, "bot", None))
-        return result
 
     async def ai_status(self):
         layer = getattr(self.resources, "ai_first", None)
@@ -289,7 +282,7 @@ class RuntimeScheduler:
         center = getattr(r, "alerts", None)
         if center is None:
             return {"state": "disabled"}
-        return await center.flush(getattr(r.telegram, "bot", None))
+        return await center.flush(r.reporter)
 
     async def ai_attribution(self):
         layer = getattr(self.resources, "ai_first", None)
@@ -317,11 +310,6 @@ class RuntimeScheduler:
             r.engine.account_key, start=r.broker.clock.now() - timedelta(days=1)
         )
         await durable_call(r.notices.enqueue, "daily_report", dedup=r.broker.clock.now().date().isoformat())
-        if getattr(r, "alerts", None) is not None:
-            try:  # Housekeeping only: acknowledged alerts older than 24 h are marked resolved.
-                await asyncio.to_thread(resolve_older_than, r.database, r.broker.clock, hours=24)
-            except Exception:
-                LOG.info("Alert housekeeping unavailable this cycle", extra={"no_alert": True})
         return report
 
     async def learning(self):
@@ -344,6 +332,25 @@ class RuntimeScheduler:
         await durable_call(prune_db_snapshots, self.settings)
         return {"state": "database_only", "name": path.name, "complete_recovery_bundle": False}
 
+    async def autonomous_retry(self):
+        if not self.settings.autonomous_demo:
+            return {"state": "disabled"}
+        try:
+            healthy = await self.resources.supervisor.health_check()
+        except Exception:
+            healthy = False
+        if self.auto_resume is not None:
+            resumed = await self.auto_resume("retry", ai_healthy=healthy)
+        else:
+            resumed = await durable_call(
+                self.resources.engine.control.auto_resume,
+                account_key=self.resources.engine.account_key,
+                components_ready=True,
+                ai_healthy=healthy,
+                trigger="retry",
+            )
+        return {"state": "resumed" if resumed else "paused", "ai_healthy": healthy}
+
     def start(self):
         self.resources.engine._ready()
         cfg = self.settings
@@ -356,6 +363,7 @@ class RuntimeScheduler:
             "news_advisory": max(300, cfg.news_poll_seconds),
             "position_reviews": cfg.ai_position_review_seconds,
             **({"alerts": 5} if getattr(self.resources, "alerts", None) is not None else {}),
+            **({"autonomous_retry": 60} if cfg.autonomous_demo else {}),
             **(
                 {"ai_learning": 300, "ai_config_review": 1800, "ai_status": 60, "ai_attribution": 60}
                 if getattr(self.resources, "ai_first", None) is not None

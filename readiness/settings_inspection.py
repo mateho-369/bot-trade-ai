@@ -49,11 +49,11 @@ def inspect_settings(root, *, env_name=None, profile="development"):
     try:
         from pydantic_settings import DotEnvSettingsSource
 
-        from core.settings import Settings
+        from core.settings import Settings, outbound_report_credentials_valid
 
         values = {}
         if env_name is not None:
-            if env_name not in {".env", ".env.example"}:
+            if env_name not in {".env", ".env.example", ".env.demo.example"}:
                 raise InspectionError("environment_must_be_source_root_file")
             path = checked_path(root / env_name, root=root)
             values = dotenv_values(read_bytes(path, root=root, limit=ENV_MAX_BYTES))
@@ -108,9 +108,12 @@ def inspect_settings(root, *, env_name=None, profile="development"):
             "start_paused": cfg.start_paused,
             "live_enabled_in_configuration": cfg.live_trading,
             "symbol_count": len(cfg.symbols),
-            "telegram_pair_configured": bool(
-                cfg.telegram_bot_token.get_secret_value() and cfg.telegram_owner_id
+            "autonomous_demo": cfg.autonomous_demo,
+            "auto_resume_max_per_day": cfg.auto_resume_max_per_day,
+            "reporter_enabled": outbound_report_credentials_valid(
+                cfg.telegram_bot_token.get_secret_value(), cfg.telegram_report_chat_id
             ),
+            "report_language": cfg.report_language,
             "mt5_login_triplet_configured": bool(
                 cfg.mt5_login and cfg.mt5_password.get_secret_value() and cfg.mt5_server
             ),
@@ -137,10 +140,9 @@ def inspect_settings(root, *, env_name=None, profile="development"):
         if cfg.live_trading:
             findings.append(
                 Finding(
-                    "live_configuration_requires_separate_owner_gates",
+                    "live_configuration_refused",
                     "blocked",
-                    "Live configuration was observed, not changed. This offline tool cannot authenticate "
-                    "an owner or authorize live execution.",
+                    "LIVE_TRADING=true is refused in this DEMO-only release; configuration was not changed.",
                 )
             )
         if not cfg.start_paused:
@@ -171,15 +173,6 @@ def inspect_settings(root, *, env_name=None, profile="development"):
                         "replaced.",
                     )
                 )
-            if not observations["telegram_pair_configured"]:
-                findings.append(
-                    Finding(
-                        "native_owner_controls_unconfigured",
-                        "blocked",
-                        "Actual private owner controls are unconfigured; a configured pair alone would "
-                        "still not authenticate an owner.",
-                    )
-                )
         for logical in (
             cfg.data_dir,
             cfg.paper_state_file,
@@ -205,7 +198,7 @@ def inspect_settings(root, *, env_name=None, profile="development"):
                     "active_model_qualification_not_checked",
                     "not_checked",
                     "Enabled model policy remains unchanged. Selected artifact/registry/provenance must "
-                    "be validated by the ordinary owner/runtime gates.",
+                    "be validated by the ordinary local-operator/runtime gates.",
                 )
             )
     except InspectionError as exc:

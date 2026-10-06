@@ -1,4 +1,4 @@
-"""Durable owner outbox: dedup, sanitization, TTL and truthful pending vs delivered."""
+"""Durable news report claims: dedup, sanitization, TTL, local-first outbound delivery."""
 
 from datetime import timedelta
 
@@ -7,7 +7,6 @@ from sqlalchemy import select
 
 from core.models import AuditLog, BotState
 from tests.news_helpers import make_news_runtime
-from trading.types import TradingDisabled
 
 
 @pytest.fixture
@@ -36,19 +35,29 @@ async def test_high_headline_is_deduplicated_across_refresh_and_restart_not_sent
         assert not session.scalar(select(AuditLog.id).where(AuditLog.action == "news.alert_delivered"))
 
 
-async def test_authenticated_sender_acknowledgement_one_way_owner_only(runtime):
+async def test_news_alerts_are_outbound_only_and_reported_once_to_local_sink(runtime):
+    from app.reporter import Reporter
+
     m, f = runtime
     f.title = "USD emergency news"
     await m.refresh()
     pending = m.alerts.pending()[0]
-    with pytest.raises(TradingDisabled):
-        m.alerts.acknowledge(pending["alert_id"], owner_id=2)
-    m.alerts.acknowledge(pending["alert_id"], owner_id=m.settings.telegram_owner_id)
-    m.alerts.acknowledge(pending["alert_id"], owner_id=m.settings.telegram_owner_id)
-    assert not m.alerts.pending()
+    assert pending["title"] == "USD emergency news"
+    reporter = Reporter(m.settings, secrets=m.database.secrets, clock=m.clock, console=lambda _: None)
+    result = await m.alerts.drain(reporter)
+    assert result["disabled"] == 1 and result["reported"] == 0
+    assert not m.alerts.pending()  # Attempt is claimed before optional outbound send.
+    reports = m.settings.resolve_path(m.settings.data_dir) / "reports"
+    assert (reports / "actions.log").is_file()
     with m.database.session() as session:
+        assert not session.scalars(select(AuditLog).where(AuditLog.action == "news.alert_delivered")).all()
         assert (
-            len(session.scalars(select(AuditLog).where(AuditLog.action == "news.alert_delivered")).all()) == 1
+            len(
+                session.scalars(
+                    select(AuditLog).where(AuditLog.action == "news.alert_report_attempted")
+                ).all()
+            )
+            == 1
         )
 
 
@@ -73,7 +82,7 @@ async def test_provider_failure_queues_scope_unknown_without_auto_pause_or_resum
     assert len(m.alerts.pending()) == 2
 
 
-async def test_high_impact_text_is_plain_and_sanitized_for_future_ui_not_telegram_html(runtime):
+async def test_high_impact_report_text_is_plain_and_sanitized(runtime):
     m, f = runtime
     f.title = "<b>USD emergency</b> <script>secret()</script>"
     await m.refresh()

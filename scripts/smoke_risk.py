@@ -19,6 +19,7 @@ from pathlib import Path
 from sqlalchemy import select
 
 from core.database import Database
+from core.local_operator import LocalOperator
 from core.models import OrderIntent, RiskState, Trade
 from core.security import sha256_json
 from core.settings import Settings
@@ -43,8 +44,6 @@ async def run() -> dict:
             _env_file=None,
             project_root=Path(directory),
             symbols=("EURUSD",),
-            telegram_owner_id=1,
-            telegram_bot_token="123456789:TEST_ONLY_NOT_USED",
             max_slippage_points=2,
             atr_trailing_enabled=False,
         )
@@ -94,10 +93,12 @@ async def run() -> dict:
                 strategy="synthetic_risk_smoke",
                 idempotency_key=sha256_json({"synthetic_entry": 2}),
             )
-            engine.control.resume(1, account_key=engine.account_key)  # Synthetic test principal only.
+            engine.control.resume(
+                LocalOperator.current(), account_key=engine.account_key
+            )  # Synthetic test principal only.
             filled = await engine.execute(plan, context)
             assert await engine.execute(plan, context) == filled
-            engine.control.pause(1)
+            engine.control.pause(LocalOperator.current())
             await broker.set_tick("EURUSD", Decimal("1.10165"), Decimal("1.10177"))
             manager = PositionManager(engine)
             await manager.cycle()
@@ -124,8 +125,8 @@ async def run() -> dict:
             assert await restarted.execute(plan, context) == filled
             owned = restarted.logger.owned(restarted.account_key)[0]
             assert owned.ticket != filled.order_ticket
-            restarted.control.kill(1)
-            await PositionManager(restarted).close(owned.identifier, owner_id=1)
+            restarted.control.kill(LocalOperator.current())
+            await PositionManager(restarted).close(owned.identifier, operator=LocalOperator.current())
             assert await restarted.broker.get_positions() == ()
             final = await restarted.broker.get_account_info()
             with database.session() as session:

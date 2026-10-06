@@ -11,7 +11,7 @@ from core.database import Database
 from core.models import BotState, ModelVersion
 from core.security import canonical_json
 from tests.ai_helpers import fixture_dataset
-from tests.risk_helpers import MOMENT, OWNER, config
+from tests.risk_helpers import BAD_OPERATOR, MOMENT, OWNER, config
 from trading.risk_types import RuntimeProfile
 from trading.types import ManualClock, SourceKind, TradingDisabled
 
@@ -37,7 +37,7 @@ def test_candidate_is_inactive_immutable_and_deduplicated(registry):
     data = model.payload()
     data["model"]["intercept"] = 999
     assert reg.get(model.model_id).payload()["model"]["intercept"] != 999
-    model = reg.activate(model.model_id, scope="backtest", owner_id=OWNER)
+    model = reg.activate(model.model_id, scope="backtest", operator=OWNER)
     assert model.active and reg.active_for_runtime().digest == result.digest
     assert reg.runtime_profile().model_sha256 == result.digest
     with pytest.raises(TradingDisabled):
@@ -47,12 +47,12 @@ def test_candidate_is_inactive_immutable_and_deduplicated(registry):
 def test_stopped_recomposed_model_inference_and_owner_rollback(registry):
     reg, result = registry
     first = reg.register(result)
-    reg.activate(first.model_id, scope="backtest", owner_id=OWNER)
+    reg.activate(first.model_id, scope="backtest", operator=OWNER)
     second_result = ModelTrainer(reg.settings, reg.profile).train(
         fixture_dataset(reg.settings, seed=91), as_of=MOMENT
     )
     second = reg.register(second_result)
-    reg.activate(second.model_id, scope="backtest", owner_id=OWNER)
+    reg.activate(second.model_id, scope="backtest", operator=OWNER)
     current = ModelRegistry(
         reg.database,
         reg.settings,
@@ -61,7 +61,7 @@ def test_stopped_recomposed_model_inference_and_owner_rollback(registry):
     )
     score = current.inference(fixture_dataset(reg.settings).samples[0].features)
     assert 0 <= score <= 1
-    selected = reg.rollback(first.model_id, scope="backtest", owner_id=OWNER)
+    selected = reg.rollback(first.model_id, scope="backtest", operator=OWNER)
     assert selected.digest == first.digest and reg.active_for_runtime().model_id == first.model_id
     with reg.database.session() as s:
         assert (
@@ -107,15 +107,15 @@ def test_artifact_pointer_and_stage_vetoes(registry, fault):
         return
     if fault == "wrong_owner":
         with pytest.raises(TradingDisabled):
-            reg.activate(model.model_id, scope="backtest", owner_id=OWNER + 1)
+            reg.activate(model.model_id, scope="backtest", operator=BAD_OPERATOR)
     elif fault == "live_skip":
         with pytest.raises(TradingDisabled):
-            reg.activate(model.model_id, scope="live", owner_id=OWNER)
+            reg.activate(model.model_id, scope="live", operator=OWNER)
     else:
-        reg.activate(model.model_id, scope="backtest", owner_id=OWNER)
+        reg.activate(model.model_id, scope="backtest", operator=OWNER)
         if fault == "paper_synthetic":
             with pytest.raises(TradingDisabled):
-                reg.activate(model.model_id, scope="paper", owner_id=OWNER)
+                reg.activate(model.model_id, scope="paper", operator=OWNER)
         elif fault == "age":
             reg.clock.advance(timedelta(days=31))
             with pytest.raises(TradingDisabled):
@@ -175,7 +175,7 @@ def test_concurrent_registration_and_selection_single_pointer(registry):
     assert len({m.model_id for m in models}) == 1
     with ThreadPoolExecutor(max_workers=3) as pool:
         models = list(
-            pool.map(lambda _: reg.activate(models[0].model_id, scope="backtest", owner_id=OWNER), range(6))
+            pool.map(lambda _: reg.activate(models[0].model_id, scope="backtest", operator=OWNER), range(6))
         )
     assert all(m.active for m in models)
     with reg.database.session() as s:
@@ -188,5 +188,5 @@ def test_selection_refuses_stale_projected_policy(registry):
     with reg.database.session() as session:
         session.get(BotState, 1).settings_overrides = {"new_hash": "f" * 64}
     with pytest.raises(TradingDisabled):
-        reg.activate(model.model_id, scope="backtest", owner_id=OWNER)
+        reg.activate(model.model_id, scope="backtest", operator=OWNER)
     assert not reg.get(model.model_id).active

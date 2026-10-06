@@ -301,7 +301,8 @@ async def test_groq_rate_limit_or_outage_uses_rule_fallback_and_can_execute(tmp_
         with execution.database.session() as session:
             assert session.get(Signal, ready.signal_id).reason == "technical_rule_fallback_news_approved"
         assert "ai.rule_fallback_review" in audit_actions(execution)
-        # Still PAUSED: the fallback never resumes. Owner resume + ordinary pre-send risk recheck apply.
+        # Still PAUSED: the fallback never resumes.
+        # Local operator resume and ordinary pre-send risk recheck apply.
         assert execution.database.status()["state"] == "paused"
         execution.control.resume(OWNER, account_key=execution.account_key)
         outcome = await execution.execute_signal(ready.signal_id)

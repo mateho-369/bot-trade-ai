@@ -17,7 +17,7 @@ def main(argv=None):
         description="Compare release bytes/closure; hashes are not signatures or trading approval"
     )
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[1])
-    parser.add_argument("--manifest", default="docs/RELEASE_15_MANIFEST.json")
+    parser.add_argument("--manifest", default="docs/RELEASE_16_MANIFEST.json")
     parser.add_argument(
         "--trusted-manifest-sha256",
         help="Lowercase external trusted SHA; not a self-authenticating local checksum",

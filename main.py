@@ -13,7 +13,7 @@ from pydantic_settings import SettingsError
 
 from core.database import Database
 from core.logging_setup import configure_logging
-from core.settings import Settings, get_settings
+from core.settings import Settings, get_settings, live_trading_requested
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -21,6 +21,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("command", choices=("check-config", "init-db", "status", "migrate-db"))
     parser.add_argument("--env-file", type=Path, help="explicit .env path; must exist")
     args = parser.parse_args(argv)
+    if live_trading_requested(args.env_file):
+        print("LIVE_TRADING=true is refused in this build; live orders cannot be started.", file=sys.stderr)
+        return 2
     if args.env_file and not args.env_file.is_file():
         print("Explicit environment file does not exist.", file=sys.stderr)
         return 2
@@ -62,9 +65,9 @@ def main(argv: list[str] | None = None) -> int:
             migration = {"migration": "1_to_2", "backup": str(backup.relative_to(settings.project_root))}
         print(json.dumps(database.status() | migration, indent=2))
         return 0
-    except Exception:
-        logging.getLogger("reflexbot.operator").exception(
-            "Operator command failed; this CLI did not connect to a broker"
+    except Exception as error:
+        logging.getLogger("reflexbot.operator").error(
+            "Operator command failed (%s); this CLI did not connect to a broker.", type(error).__name__
         )
         return 1
     finally:

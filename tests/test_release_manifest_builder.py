@@ -30,9 +30,10 @@ def test_built_manifest_passes_the_read_only_release_verifier(tmp_path):
     assert main(["--pytest-passed", "7", "--root", str(root)]) == 0
     result = verify_release(root, manifest_name=MANIFEST)
     assert result.manifest_valid and result.integrity_verified, result.findings
-    assert result.release == "0.13.0" and result.declared_files == result.verified_files
+    assert result.release == "0.14.0" and result.declared_files == result.verified_files
     document = json.loads((root / MANIFEST).read_text())
-    assert document["pytest_passed"] == 7 and document["cumulative_parts"][-1] == 15
+    assert document["pytest_passed"] == 7 and document["cumulative_parts"][-1] == 16
+    assert document["predecessor_part15"]["source_hashes_verified"] is False
     assert document["integrity_is_not_signature_or_trading_permission"] is True
 
 

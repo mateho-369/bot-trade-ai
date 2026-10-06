@@ -97,7 +97,7 @@ def inspect_image(data):
             or sql_json(state[0]["settings_overrides"]) != {}
         ):
             raise InspectionError("bundle_ledger_runtime_not_released")
-        # These research ledgers must not contain live-stage grants or genuine owner approvals.
+        # These research ledgers must not contain live-stage grants or legacy remote-control approvals.
         for table in ("deployment_evidence", "owner_approvals"):
             if connection.execute(f"SELECT count(*) FROM {table}").fetchone()[0]:
                 raise InspectionError("bundle_research_ledger_contains_authorizations")

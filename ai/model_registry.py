@@ -16,8 +16,8 @@ from sqlalchemy import select
 from ai.artifacts import artifact_path, read_model, save_immutable
 from ai.feature_engineering import FEATURE_NAMES, FEATURE_SCHEMA_HASH, FeatureVector
 from ai.json_validation import AIInvalidResponse, strict_json
+from ai.local_operator_guard import require_local_operator, require_stopped_flat
 from ai.model_trainer import TrainingResult
-from ai.owner_guard import require_owner, require_stopped_flat
 from ai.portable_model import PortableModel
 from ai.replay_binding import validate_replay_binding, validate_replay_registry_context
 from core.database import Database
@@ -364,9 +364,9 @@ class ModelRegistry:
         return evidence
 
     def activate(
-        self, model_id: int, *, scope: str, owner_id: int, account: AccountInfo | None = None, rollback=False
+        self, model_id: int, *, scope: str, operator, account: AccountInfo | None = None, rollback=False
     ):
-        require_owner(self.settings, owner_id)
+        operator_id = require_local_operator(operator)
         if type(model_id) is not int or model_id <= 0 or type(rollback) is not bool:
             raise TradingDisabled("positive model ID and explicit boolean rollback required")
         if scope not in SCOPES[1:]:
@@ -397,11 +397,11 @@ class ModelRegistry:
             self.database.add_audit(
                 session,
                 "model.rollback_selected" if rollback else "model.selected_paused",
-                "owner",
+                "local_operator",
                 {
                     "model_id": row.id,
                     "scope": scope,
-                    "owner_id": owner_id,
+                    "operator_id": operator_id,
                     "evidence_ids": list(evidence),
                     "previous_ids": [x.id for x in current],
                     "broker_permission": False,
@@ -409,8 +409,8 @@ class ModelRegistry:
             )
             return self._registered(row)
 
-    def rollback(self, model_id: int, *, scope: str, owner_id: int, account: AccountInfo | None = None):
-        return self.activate(model_id, scope=scope, owner_id=owner_id, account=account, rollback=True)
+    def rollback(self, model_id: int, *, scope: str, operator, account: AccountInfo | None = None):
+        return self.activate(model_id, scope=scope, operator=operator, account=account, rollback=True)
 
     def active_for_runtime(self):
         with self.database.session() as session:

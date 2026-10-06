@@ -18,7 +18,7 @@ def preflight(
     profile: Profile = "development",
     env_name=None,
     inspect_sqlite_snapshot=False,
-    manifest_name="docs/RELEASE_15_MANIFEST.json",
+    manifest_name="docs/RELEASE_16_MANIFEST.json",
     trusted_manifest_sha256=None,
 ):
     if profile not in {"development", "windows_native"} or type(inspect_sqlite_snapshot) is not bool:
@@ -92,7 +92,7 @@ def preflight(
     report.add(
         "diagnostic_not_native_qualification",
         "not_checked",
-        "Offline checks are not actual-platform soak, restore, SDK/provider/owner/security tests, signed "
-        "stage evidence or live approval.",
+        "Offline checks are not actual-platform soak, restore, SDK/provider/local-operator/security tests, "
+        "signed stage evidence or live approval.",
     )
     return report.document(integrity)

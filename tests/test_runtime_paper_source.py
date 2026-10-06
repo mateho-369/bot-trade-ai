@@ -10,7 +10,7 @@ from trading.types import ManualClock, SourceKind
 
 
 async def test_paper_profile_binds_actual_market_not_paper_execution_label(tmp_path):
-    cfg = config(tmp_path, mt5_backend="real", runtime_telegram_enabled=False)
+    cfg = config(tmp_path, mt5_backend="real")
     db = Database(cfg)
     db.initialize()
     clock = ManualClock(MOMENT)

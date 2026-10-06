@@ -1,9 +1,9 @@
-"""Owner-controlled AI_FALLBACK_MODE and the two-layer AI-dynamic limits (offline, mock/paper only).
+"""Local-operator AI_FALLBACK_MODE and two-layer AI-dynamic limits (offline, mock/paper only).
 
 * BLOCK_ON_AI_FAILURE (default): AI unavailable => NO new entries; trailing/protection continue.
 * TECHNICAL_ONLY: AI unavailable => the technical score must reach AI_RULE_FALLBACK_MIN_SCORE.
-* Toggle: owner only (Telegram + Mini App), audited, never touches the kill switch or risk gates.
-* Dynamic limits: AI values only while the AI is available; owner defaults otherwise; hard caps always.
+* Toggle: current local operator only, audited, never touches the kill switch or risk gates.
+* Dynamic limits: AI values only while the AI is available; reviewed defaults otherwise; hard caps always.
 """
 
 from datetime import timedelta
@@ -18,8 +18,7 @@ from ai.ai_supervisor import AISupervisor
 from ai.openai_client import OpenAIClient
 from core.models import AuditLog, BotState
 from tests.ai_helpers import ScriptedHTTP
-from tests.owner_helpers import api_client, auth_header, fake_transport, message_update, owner_services
-from tests.risk_helpers import OWNER, make_engine, open_one, safe_context
+from tests.risk_helpers import BAD_OPERATOR, OWNER, make_engine, open_one, safe_context
 from tests.signal_helpers import make_signal_runtime, news
 from tests.test_ai_first import Provider, decision_json, market, snapshot_for  # noqa: F401 (fixture)
 from trading.ai_controls import (
@@ -33,6 +32,7 @@ from trading.ai_controls import (
     effective_limits,
     ensure_control_tables,
     fallback_mode,
+    fallback_status,
     publish_ai_status,
     set_fallback_mode,
     write_dynamic,
@@ -99,7 +99,7 @@ async def test_technical_mode_good_signal_opens_a_paper_trade(tmp_path):
         tmp_path, ai_require_approval=False, ai_rule_fallback_enabled=True
     )
     try:
-        set_fallback_mode(execution.database, execution.clock, "TECHNICAL_ONLY", owner_id=OWNER)
+        set_fallback_mode(execution.database, execution.clock, "TECHNICAL_ONLY", operator=OWNER)
         ready = await signals.evaluate("EURUSD", reviewer=supervisor, news=news(signals.clock))
         assert ready.approved, ready.reasons
         assert ready.score >= execution.settings.ai_rule_fallback_min_score
@@ -116,7 +116,7 @@ async def test_technical_mode_good_signal_opens_a_paper_trade(tmp_path):
 async def test_technical_mode_bad_signal_opens_no_trade(tmp_path):
     signals, execution, supervisor, _ = await groq_down(tmp_path, ai_rule_fallback_min_score=100)
     try:
-        set_fallback_mode(execution.database, execution.clock, "TECHNICAL_ONLY", owner_id=OWNER)
+        set_fallback_mode(execution.database, execution.clock, "TECHNICAL_ONLY", operator=OWNER)
         ready = await signals.evaluate("EURUSD", reviewer=supervisor, news=news(signals.clock))
         assert ready.score < 100 and not ready.approved
         assert await execution.broker.get_positions() == ()
@@ -127,7 +127,7 @@ async def test_technical_mode_bad_signal_opens_no_trade(tmp_path):
 async def test_technical_mode_still_obeys_the_news_block(tmp_path):
     signals, execution, supervisor, _ = await groq_down(tmp_path)
     try:
-        set_fallback_mode(execution.database, execution.clock, "TECHNICAL_ONLY", owner_id=OWNER)
+        set_fallback_mode(execution.database, execution.clock, "TECHNICAL_ONLY", operator=OWNER)
         ready = await signals.evaluate("EURUSD", reviewer=supervisor, news=news(signals.clock, safe=False))
         assert not ready.approved
     finally:
@@ -181,39 +181,28 @@ async def test_require_approval_blocks_even_in_technical_mode(market):  # noqa: 
     assert (await brain.decide(await snapshot_for(market))).source == "ai_blocked"
 
 
-# -- owner toggle: Telegram + Mini App, audited, kill switch untouched ------------------------------
-async def test_telegram_toggle_is_owner_only_and_audited(tmp_path):
-    services = owner_services(tmp_path)
-    transport, session = fake_transport(services)
+# -- local operator toggle: typed, audited, kill switch untouched ----------------------------------
+async def test_local_operator_fallback_toggle_is_audited_and_rejects_foreign_identity(tmp_path):
+    engine = await make_engine(tmp_path)
     try:
-        await transport.dispatcher.feed_update(
-            transport.bot, message_update(services, "/ai_fallback_technical")
-        )
-        assert fallback_mode(services.database, services.settings) == "TECHNICAL_ONLY"
-        await transport.dispatcher.feed_update(
-            transport.bot, message_update(services, "/ai_fallback_status", message_id=2)
-        )
-        await transport.dispatcher.feed_update(
-            transport.bot, message_update(services, "/ai_fallback_block", message_id=3)
-        )
-        assert fallback_mode(services.database, services.settings) == "BLOCK_ON_AI_FAILURE"
-        replies = [m.text for name, m in session.calls if name == "SendMessage"]
-        assert "TECHNICAL_ONLY" in replies[0] and "kill switch" in replies[0].lower()
-        assert "AI fallback mode: TECHNICAL_ONLY" in replies[1]
-        assert "BLOCK_ON_AI_FAILURE" in replies[2]
-        changes = audits(services.database, "owner.ai_fallback_mode_changed")
-        assert [(c["from"], c["to"], c["owner_id"]) for c in changes] == [
-            (None, "TECHNICAL_ONLY", services.settings.telegram_owner_id),
-            ("TECHNICAL_ONLY", "BLOCK_ON_AI_FAILURE", services.settings.telegram_owner_id),
-        ]
-        calls = len(session.calls)
-        await transport.dispatcher.feed_update(
-            transport.bot, message_update(services, "/ai_fallback_technical", sender=43, message_id=4)
-        )
-        assert len(session.calls) == calls  # Non-owner: silently ignored.
-        assert fallback_mode(services.database, services.settings) == "BLOCK_ON_AI_FAILURE"
+        assert fallback_mode(engine.database, engine.settings) == "BLOCK_ON_AI_FAILURE"
+        first = set_fallback_mode(engine.database, engine.clock, "TECHNICAL_ONLY", operator=OWNER)
+        assert first == {"mode": "TECHNICAL_ONLY", "previous": None}
+        assert fallback_mode(engine.database, engine.settings) == "TECHNICAL_ONLY"
+        status = fallback_status(engine.database, engine.settings)
+        assert status["source"] == "local_operator" and status["mode"] == "TECHNICAL_ONLY"
+        with pytest.raises(TradingDisabled):
+            set_fallback_mode(engine.database, engine.clock, "BLOCK_ON_AI_FAILURE", operator=BAD_OPERATOR)
+        with pytest.raises(TradingDisabled):
+            set_fallback_mode(engine.database, engine.clock, "BLOCK_ON_AI_FAILURE", operator=42)
+        changes = audits(engine.database, "local_operator.ai_fallback_mode_changed")
+        assert len(changes) == 1
+        assert changes[0]["operator_id"] == OWNER.operator_id
+        assert changes[0]["from"] is None and changes[0]["to"] == "TECHNICAL_ONLY"
+        assert engine.database.status()["state"] == "paused"
     finally:
-        await transport.close()
+        await engine.shutdown()
+        engine.database.close()
 
 
 async def test_toggle_never_touches_the_kill_switch(tmp_path):
@@ -221,44 +210,13 @@ async def test_toggle_never_touches_the_kill_switch(tmp_path):
     try:
         engine.control.kill(OWNER)
         for mode in ("TECHNICAL_ONLY", "BLOCK_ON_AI_FAILURE", "TECHNICAL_ONLY"):
-            set_fallback_mode(engine.database, engine.clock, mode, owner_id=OWNER)
+            set_fallback_mode(engine.database, engine.clock, mode, operator=OWNER)
         with engine.database.session() as session:
             state = session.get(BotState, 1)
             assert state.kill_switch_active and state.desired_state == "killed"
     finally:
         await engine.shutdown()
         engine.database.close()
-
-
-async def test_miniapp_settings_toggle_requires_owner_and_validates_the_mode(tmp_path):
-    services = owner_services(tmp_path)
-    async with api_client(services) as (client, _):
-        denied = await client.post(
-            "/api/ai_fallback",
-            json={"request_id": "0" * 8 + "-0000-4000-8000-" + "0" * 12, "mode": "TECHNICAL_ONLY"},
-        )
-        bad = await client.post(
-            "/api/ai_fallback",
-            json={"request_id": "1" * 8 + "-1111-4111-8111-" + "1" * 12, "mode": "YOLO"},
-            headers=auth_header(services),
-        )
-        ok = await client.post(
-            "/api/ai_fallback",
-            json={"request_id": "2" * 8 + "-2222-4222-8222-" + "2" * 12, "mode": "TECHNICAL_ONLY"},
-            headers=auth_header(services),
-        )
-        status = await client.get("/api/ai_fallback", headers=auth_header(services))
-        settings_view = await client.get("/api/settings", headers=auth_header(services))
-        limits = await client.get("/api/limits", headers=auth_header(services))
-    assert denied.status_code == 401 and bad.status_code == 422
-    assert ok.status_code == 200 and ok.json()["ai_fallback_mode"] == "TECHNICAL_ONLY"
-    assert status.json()["mode"] == "TECHNICAL_ONLY" and status.json()["source"] == "owner"
-    assert status.json()["kill_switch_unaffected"] is True
-    assert settings_view.json()["ai_fallback"]["mode"] == "TECHNICAL_ONLY"
-    body = limits.json()
-    assert body["hard_caps"]["max_daily_trades"] == 25 and body["hard_caps"]["max_open_positions"] == 5
-    assert body["effective"]["source"] == "defaults"  # No AI heartbeat => owner defaults.
-    assert len(audits(services.database, "owner.ai_fallback_mode_changed")) == 1
 
 
 # -- two-layer dynamic limits --------------------------------------------------------------------
@@ -327,7 +285,7 @@ async def test_risk_engine_enforces_the_ai_position_limit_only_while_ai_is_up(tm
         vetoes = [d for d in audits(engine.database, "risk.entry_decision") if d.get("approved") is False]
         if fresh_ai:  # AI limit 1 (inside hard cap 5) => second symbol vetoed by the risk engine.
             assert positions == 1 and vetoes and "position_cap" in vetoes[-1]["reasons"]
-        else:  # AI unavailable => owner default 3 => second symbol allowed.
+        else:  # AI unavailable => reviewed default 3 => second symbol allowed.
             assert positions == 2 and not any("position_cap" in v["reasons"] for v in vetoes)
     finally:
         await engine.shutdown()

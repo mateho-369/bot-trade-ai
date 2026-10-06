@@ -18,7 +18,7 @@ Invariants (enforced in code and tests):
   existing bound PositionReview checks) extend TP to 120 %. It can never remove or loosen a lock:
   every stop the AI path requests passes ``assert_never_loosens`` or raises LockRegressionError.
 * Closing and modifying go through the normal ExecutionEngine (paper/mock by default, native
-  adapters DenyAllWrites); owner pause/kill never blocks PROTECTIVE work.
+  adapters DenyAllWrites); local pause/kill never blocks PROTECTIVE work.
 * Every threshold decision is written to ``ai_decision_journal`` (position_id, threshold, AI
   decision/confidence/reason, final action; outcome attached when the trade closes).
 """

@@ -69,13 +69,13 @@ def test_unlisted_runnables_cannot_hide_by_keeping_all_original_hashes(source, n
     assert not result.integrity_verified and "runnable_set_mismatch" in codes(result)
 
 
-def test_credential_name_exclusion_never_drops_legitimate_initdata_test(source):
+def test_credential_name_exclusion_never_drops_legitimate_ops_test(source):
     root, _, _ = source
     (root / "tests").mkdir()
-    path = root / "tests/test_telegram_initdata.py"
-    path.write_text('"""TEST ONLY real source filename, not a bearer."""\n')
+    path = root / "tests/test_ops_cli.py"
+    path.write_text('"""TEST ONLY local-operator source, not credential data."""\n')
     _, anchor = seal(root)
-    assert "tests/test_telegram_initdata.py" in runnable_files(root)
+    assert "tests/test_ops_cli.py" in runnable_files(root)
     assert verify_release(root, trusted_manifest_sha256=anchor).integrity_verified
 
 
@@ -145,7 +145,7 @@ def test_manifest_traversal_secret_and_case_collision_refused(source, name):
 
 def test_duplicate_json_keys_rejected_even_when_last_manifest_would_pass(source):
     root, doc, _ = source
-    path = root / "docs/RELEASE_15_MANIFEST.json"
+    path = root / "docs/RELEASE_16_MANIFEST.json"
     body = json.dumps(doc)
     path.write_text('{"files": {},' + body[1:])
     result = verify_release(root)
@@ -154,7 +154,7 @@ def test_duplicate_json_keys_rejected_even_when_last_manifest_would_pass(source)
 
 def test_trusted_anchor_binds_metadata_not_only_declared_bytes(source):
     root, _, anchor = source
-    path = root / "docs/RELEASE_15_MANIFEST.json"
+    path = root / "docs/RELEASE_16_MANIFEST.json"
     path.write_text(path.read_text() + "\n")
     assert verify_release(root).integrity_verified
     assert not verify_release(root, trusted_manifest_sha256=anchor).integrity_verified

@@ -30,6 +30,51 @@ from core.security import SENSITIVE_KEY, sha256_json
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 TIMEFRAME_MINUTES = {"M1": 1, "M5": 5, "M15": 15, "M30": 30, "H1": 60, "H4": 240, "D1": 1440}
+REPORT_TOKEN_PATTERN = re.compile(r"[0-9]{5,15}:[A-Za-z0-9_-]{20,128}\Z")
+REPORT_CHAT_PATTERN = re.compile(r"(?:-?[0-9]{1,20}|@[A-Za-z0-9_]{5,32})\Z")
+
+
+def outbound_report_credentials_valid(token: str, chat_id: object) -> bool:
+    """Return whether optional sendMessage-only credentials have valid formats."""
+    return bool(
+        isinstance(token, str)
+        and isinstance(chat_id, str)
+        and REPORT_TOKEN_PATTERN.fullmatch(token)
+        and REPORT_CHAT_PATTERN.fullmatch(chat_id.strip())
+    )
+
+
+def live_trading_requested(env_file: str | Path | None = None) -> bool:
+    """Read only the LIVE_TRADING switch for a clear refusal before settings validation."""
+    true_values = {"1", "true", "yes", "on", "y", "t"}
+
+    def enabled(value: str) -> bool:
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+            value = value[1:-1]
+        else:
+            value = value.split(" #", 1)[0].strip()
+        return value.lower() in true_values
+
+    for key in ("LIVE_TRADING", "live_trading"):
+        if key in os.environ:
+            return enabled(os.environ[key])
+    path = Path(env_file) if env_file is not None else Path(".env")
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return False
+    result = False
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("export "):
+            stripped = stripped[7:].lstrip()
+        key, separator, value = stripped.partition("=")
+        if separator and key.strip().upper() == "LIVE_TRADING":
+            result = enabled(value)
+    return result
+
+
 Timeframe = Literal["M1", "M5", "M15", "M30", "H1", "H4", "D1"]
 Provider = Literal["ollama", "openai", "disabled"]
 # Owner-controlled behaviour when the AI provider cannot answer an ENTRY decision.
@@ -258,6 +303,8 @@ class Settings(BaseSettings):
     live_trading: bool = False
     paper_trading: bool = True
     start_paused: bool = True
+    autonomous_demo: bool = False
+    auto_resume_max_per_day: int = Field(default=3, ge=1, le=3)
     mt5_backend: Literal["mock", "real"] = "mock"
     mt5_terminal_path: str = "C:/Program Files/MetaTrader 5/terminal64.exe"
     mt5_login: int | None = Field(default=None, gt=0)
@@ -356,47 +403,10 @@ class Settings(BaseSettings):
     allow_tp_extension: bool = False
     tp_extension_factor: Decimal = Field(default=Decimal("1.2"), ge=1, le=1.5)
 
+    # Telegram is strictly outbound reporting. Missing/invalid values disable only remote reports.
     telegram_bot_token: SecretStr = SecretStr("")
-    telegram_owner_id: int | None = Field(default=None, gt=0)
-    telegram_miniapp_url: str = ""
-    telegram_webhook_url: str = ""
-    telegram_webhook_secret: SecretStr = SecretStr("")
-    telegram_initdata_max_age_seconds: int = Field(default=300, ge=30, le=600)
-    telegram_initdata_max_bytes: int = Field(default=8192, ge=1024, le=16384)
-    telegram_auth_future_skew_seconds: int = Field(default=5, ge=0, le=15)
-    telegram_command_max_age_seconds: int = Field(default=60, ge=15, le=120)
-    owner_confirmation_ttl_seconds: int = Field(default=45, ge=10, le=60)
-    owner_max_pending_confirmations: int = Field(default=64, ge=4, le=128)
-    telegram_use_webhook: bool = False
-    api_host: str = "127.0.0.1"
-    api_port: int = Field(default=8000, ge=1024, le=65535)
-    api_rate_limit_per_minute: int = Field(default=60, ge=5, le=300)
-    api_max_request_bytes: int = Field(default=16384, ge=1024, le=65536)
-    api_trusted_hosts: tuple[str, ...] = Field(
-        default=("127.0.0.1", "localhost"), validation_alias="API_TRUSTED_HOSTS_JSON"
-    )
-    api_cors_origins: tuple[str, ...] = Field(default=(), validation_alias="API_CORS_ORIGINS_JSON")
-    api_safe_stop_rate_per_minute: int = Field(default=10, ge=2, le=30)
-    api_max_header_bytes: int = Field(default=16384, ge=4096, le=32768)
-    api_max_rate_limit_keys: int = Field(default=2048, ge=32, le=10000)
-    api_trusted_proxy_ips: tuple[str, ...] = Field(
-        default=("127.0.0.1", "::1"), validation_alias="API_TRUSTED_PROXY_IPS_JSON"
-    )
-
-    @field_validator("api_trusted_proxy_ips")
-    @classmethod
-    def validate_proxy_ips(cls, values):
-        import ipaddress
-
-        if len(values) > 8 or len(set(values)) != len(values):
-            raise ValueError("at most eight unique exact proxy IP addresses are permitted")
-        try:
-            normalized = tuple(str(ipaddress.ip_address(v)) for v in values)
-            if len(set(normalized)) != len(normalized):
-                raise ValueError("duplicate normalized proxy IP")
-            return normalized
-        except ValueError:
-            raise ValueError("exact proxy IP addresses required; no wildcard, hostnames or CIDRs") from None
+    telegram_report_chat_id: str = ""
+    report_language: Literal["km", "en"] = "en"
 
     ai_provider: Provider = "ollama"
     ai_fallback_provider: Provider = "openai"
@@ -424,14 +434,14 @@ class Settings(BaseSettings):
     ai_circuit_cooldown_seconds: int = Field(default=60, ge=10, le=600)
     ai_suggestion_ttl_seconds: int = Field(default=3600, ge=60, le=86400)
     # Rule-based fallback: ONLY when the AI provider is unavailable/times out/returns invalid JSON.
-    # A valid AI reject/WAIT/low confidence stays final. News/ML/risk/stage/owner gates still apply.
+    # A valid AI reject/WAIT/low confidence stays final. Risk, stage and local pause/kill gates still apply.
     ai_rule_fallback_enabled: bool = False
     ai_rule_fallback_min_score: float = Field(default=80, ge=50, le=100)
     ai_rule_fallback_allow_live: bool = False
     # BLOCK_ON_AI_FAILURE (default, safest): an AI outage blocks NEW entries; mechanical trailing and
     # every protective path continue. TECHNICAL_ONLY: technical score >= AI_RULE_FALLBACK_MIN_SCORE may
-    # trade (risk/news/stage/owner/kill gates still apply). The owner can switch it at runtime via
-    # /ai_fallback_block, /ai_fallback_technical or the Mini App (stored in the DB, audited).
+    # trade only when AI approval is not required; risk/news/stage/local pause/kill gates still apply.
+    # A current local operator may change this reviewed DB overlay with `python -m scripts.ops ai-fallback`.
     ai_fallback_mode: AIFallbackMode = "BLOCK_ON_AI_FAILURE"
     # Entry decisions only: transient provider failures are retried inside AI_TIMEOUT_SECONDS.
     ai_max_retries: int = Field(default=3, ge=0, le=5)
@@ -449,13 +459,13 @@ class Settings(BaseSettings):
     # wait/reject is final. all_must_approve: every enabled decision AI must approve the same side.
     ai_decision_mode: Literal["first_available", "all_must_approve"] = "first_available"
     # Layer-1 AI-dynamic limits (max trades/day 6-20, open positions 1-5, risk 0.1-1.0 %, target $1-20)
-    # inside layer-2 hard caps (25 trades, 5 positions, 1.0 % risk). Off => static owner settings.
+    # inside layer-2 hard caps (25 trades, 5 positions, 1.0 % risk). Off => reviewed static settings.
     ai_dynamic_limits_enabled: bool = True
     auto_reduce_risk: bool = False
     auto_adapt_strategy_weights: bool = False
     max_strategy_weight_step: Decimal = Field(default=Decimal("0.02"), gt=0, le=Decimal("0.02"))
     # AI-FIRST brain (ai/ai_brain.py). Every entry/position decision is journalled; the brain only
-    # ever ADDS a veto or REDUCES risk. It never bypasses news/risk/stage/owner/kill gates.
+    # ever ADDS a veto or REDUCES risk. It never bypasses news/risk/stage/local pause/kill gates.
     ai_first_enabled: bool = True
     # Deep (nightly/learning) reviews use a separate model on the same OpenAI-compatible endpoint.
     ai_deep_model: str = Field(
@@ -468,7 +478,7 @@ class Settings(BaseSettings):
     ai_adaptive_trailing_enabled: bool = True
     ai_trailing_timeout_seconds: float = Field(default=2.0, ge=0.5, le=5.0)
     # Minor AI config adjustments (risk +/-0.1, target +/-$1) inside hard bounds apply to the bounded
-    # runtime overlay automatically; everything else needs owner approval via Telegram/Mini App.
+    # runtime overlay automatically; major/structural suggestions stay pending for explicit local review.
     ai_config_auto_apply_minor: bool = True
 
     news_api_key: SecretStr = SecretStr("")
@@ -556,8 +566,6 @@ class Settings(BaseSettings):
     stage_min_trades: int = Field(default=100, ge=50, le=10000)
     stage_min_profit_factor: Decimal = Field(default=Decimal("1.1"), gt=1, le=5)
     stage_max_drawdown_percent: Decimal = Field(default=Decimal("5"), gt=0, le=10)
-    live_approval_ttl_seconds: int = Field(default=3600, ge=60, le=86400)
-
     database_url: SecretStr = SecretStr("sqlite:///data/reflexbot.db")
     database_busy_timeout_ms: int = Field(default=10000, ge=1000, le=60000)
     signal_interval_seconds: int = Field(default=30, ge=5, le=300)
@@ -566,9 +574,6 @@ class Settings(BaseSettings):
     watchdog_interval_seconds: int = Field(default=30, ge=15, le=120)
     watchdog_stale_seconds: int = Field(default=90, ge=30, le=600)
     watchdog_max_restarts_per_hour: int = Field(default=3, ge=1, le=5)
-    runtime_api_enabled: bool = True
-    runtime_telegram_enabled: bool = True
-    runtime_register_menu: bool = False
     runtime_learning_enabled: bool = False
     runtime_learning_hour_utc: int = Field(default=2, ge=0, le=23)
     runtime_report_hour_utc: int = Field(default=0, ge=0, le=23)
@@ -589,7 +594,7 @@ class Settings(BaseSettings):
     data_dir: Path = Path("data")
     backup_dir: Path = Path("data/backups")
 
-    @field_validator("mt5_login", "telegram_owner_id", mode="before")
+    @field_validator("mt5_login", mode="before")
     @classmethod
     def empty_int_is_none(cls, value: object) -> object:
         return None if value == "" else value
@@ -770,6 +775,10 @@ class Settings(BaseSettings):
             raise ValueError(
                 "AI_RULE_FALLBACK_MIN_SCORE must be >= AI_CONFIDENCE_THRESHOLD and MIN_SIGNAL_SCORE"
             )
+        if self.autonomous_demo and self.live_trading:
+            raise ValueError("AUTONOMOUS_DEMO is incompatible with LIVE_TRADING")
+        if self.autonomous_demo and not self.ai_require_approval:
+            raise ValueError("AUTONOMOUS_DEMO requires AI_REQUIRE_APPROVAL=true")
         if self.live_trading and self.demo_fast_track:
             raise ValueError("DEMO_FAST_TRACK is impossible with LIVE_TRADING")
         if self.live_trading and self.news_unavailable_policy != "block":
@@ -785,19 +794,8 @@ class Settings(BaseSettings):
             ):
                 raise ValueError("remote Ollama is disabled")
         if self.live_trading:
-            if self.demo_mode or self.paper_trading or self.backtest_mode or self.mt5_backend != "real":
-                raise ValueError(
-                    "live requires DEMO_MODE=false, PAPER_TRADING=false, BACKTEST_MODE=false and real backend"
-                )
-            if not self.telegram_bot_token.get_secret_value() or not self.telegram_owner_id:
-                raise ValueError("live requires owner-only Telegram controls")
-            if not (
-                self.news_required_for_entry
-                and self.use_economic_calendar
-                and self.block_trading_high_impact_news
-            ):
-                raise ValueError("live requires fresh news, calendar and high-impact blocking")
-        elif self.backtest_mode:
+            raise ValueError("LIVE_TRADING=true is refused: this release has no live execution path.")
+        if self.backtest_mode:
             if self.paper_trading or not self.demo_mode or self.mt5_backend != "mock":
                 raise ValueError("backtest requires PAPER_TRADING=false, DEMO_MODE=true and mock backend")
         elif self.paper_trading:
@@ -841,52 +839,6 @@ class Settings(BaseSettings):
             raise ValueError("position/risk observation cadence must precede risk expiry")
         if self.runtime_shutdown_seconds < self.mt5_api_timeout_seconds:
             raise ValueError("shutdown budget must cover a native API timeout without force killing")
-        if self.telegram_use_webhook and not (self.runtime_api_enabled and self.runtime_telegram_enabled):
-            raise ValueError("webhook needs explicitly enabled API and Telegram runtime")
-        if self.watchdog_stale_seconds < 3 * self.heartbeat_interval_seconds:
-            raise ValueError("watchdog staleness must allow at least three heartbeats")
-        credentials = (
-            bool(self.mt5_login),
-            bool(self.mt5_password.get_secret_value()),
-            bool(self.mt5_server),
-        )
-        if any(credentials) and not all(credentials):
-            raise ValueError("supply all MT5 login/password/server values or leave all empty")
-        if bool(self.telegram_bot_token.get_secret_value()) != bool(self.telegram_owner_id):
-            raise ValueError("Telegram token and owner ID must be configured together")
-        for url in (self.telegram_miniapp_url, self.telegram_webhook_url):
-            if url:
-                _valid_url(url, https_only=True)
-        if self.telegram_use_webhook and not (
-            self.telegram_bot_token.get_secret_value()
-            and self.telegram_webhook_url
-            and re.fullmatch(r"[A-Za-z0-9_-]{32,256}", self.telegram_webhook_secret.get_secret_value())
-        ):
-            raise ValueError("webhook mode requires Telegram credentials, HTTPS and a 32+ character secret")
-        if self.telegram_initdata_max_bytes + 1024 > self.api_max_header_bytes:
-            raise ValueError("header bound must accommodate initData and ordinary headers")
-        if (
-            not self.api_trusted_hosts
-            or len(self.api_trusted_hosts) > 30
-            or len(set(self.api_trusted_hosts)) != len(self.api_trusted_hosts)
-            or any(
-                not re.fullmatch(r"(?:\*\.)?[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?", h)
-                or ".." in h
-                or h == "*"
-                for h in self.api_trusted_hosts
-            )
-        ):
-            raise ValueError("bounded explicit hostnames/IPs required; unrestricted wildcard forbidden")
-        for url in (self.telegram_miniapp_url, self.telegram_webhook_url):
-            parsed = urlparse(url)
-            if url and (parsed.query or parsed.fragment or parsed.params):
-                raise ValueError("Telegram interface URLs cannot contain queries/fragments/params")
-        for origin in self.api_cors_origins:
-            parsed = urlparse(origin)
-            if parsed.path not in {"", "/"} or parsed.query or parsed.fragment or parsed.params:
-                raise ValueError("CORS needs exact HTTPS origins, not URL paths or credentials")
-        if len(set(self.api_cors_origins)) != len(self.api_cors_origins) or len(self.api_cors_origins) > 8:
-            raise ValueError("bounded unique CORS origins required")
         _valid_url(self.ollama_base_url)
         if not self.allow_remote_ollama and urlparse(self.ollama_base_url).hostname not in {
             "localhost",
@@ -906,8 +858,6 @@ class Settings(BaseSettings):
                 raise ValueError("invalid configured AI model identifier")
         if self.model_max_dataset_rows < self.model_min_labelled_trades:
             raise ValueError("dataset cap must accommodate the minimum labelled trades")
-        for url in self.api_cors_origins:
-            _valid_url(url, https_only=True)
         if len(self.rss_urls) > 12 or len(set(self.rss_urls)) != len(self.rss_urls):
             raise ValueError("at most 12 unique RSS URLs")
         for url in self.rss_urls:
@@ -945,8 +895,6 @@ class Settings(BaseSettings):
             ZoneInfo(self.finnhub_calendar_timezone)
         except (ValueError, ZoneInfoNotFoundError):
             raise ValueError("known Finnhub calendar timezone required") from None
-        if not self.api_trusted_hosts or "*" in self.api_trusted_hosts:
-            raise ValueError("explicit API trusted hosts are required; wildcard is forbidden")
         for symbol, limit in self.symbol_spread_limits.items():
             if not symbol or not 0 <= limit <= 100000:
                 raise ValueError("invalid per-symbol spread limit")
@@ -1112,14 +1060,8 @@ class Settings(BaseSettings):
             "log_level",
             "log_max_bytes",
             "log_backup_count",
-            "api_host",
-            "api_port",
-            "api_trusted_hosts",
-            "api_trusted_proxy_ips",
-            "api_cors_origins",
-            "telegram_miniapp_url",
-            "telegram_webhook_url",
-            "telegram_use_webhook",
+            "telegram_report_chat_id",
+            "report_language",
             "mt5_terminal_path",
             "database_busy_timeout_ms",
             "runtime_health_file",
@@ -1147,7 +1089,6 @@ class Settings(BaseSettings):
 
     def strategy_fingerprint(self) -> str:
         # Stage evidence can span paper/demo/live and different account logins.
-        # Owner execution approvals use safety_fingerprint PLUS actual account/session.
         snapshot = self.safety_snapshot()
         for name in (
             "mode",
@@ -1158,13 +1099,12 @@ class Settings(BaseSettings):
             "mt5_backend",
             "mt5_login",
             "mt5_server",
-            "telegram_owner_id",
         ):
             snapshot.pop(name, None)
         return sha256_json(snapshot)
 
     def public_config(self) -> dict[str, object]:
-        # Strict allowlist. Never expose model_dump() to an API or to logs.
+        # Strict allowlist. Never expose model_dump() to reports or logs.
         return {
             "mode": self.mode.value,
             "backend": self.mt5_backend,
@@ -1189,7 +1129,12 @@ class Settings(BaseSettings):
             "news_required": self.news_required_for_entry,
             "news_source_policy_count": len(self.news_source_coverage),
             "calendar_provider": self.calendar_provider,
-            "telegram_configured": bool(self.telegram_bot_token.get_secret_value()),
+            "reporter_configured": outbound_report_credentials_valid(
+                self.telegram_bot_token.get_secret_value(), self.telegram_report_chat_id
+            ),
+            "report_language": self.report_language,
+            "autonomous_demo": self.autonomous_demo,
+            "auto_resume_max_per_day": self.auto_resume_max_per_day,
             "ai_provider": self.ai_provider,
             "ai_rule_fallback_enabled": self.ai_rule_fallback_enabled,
             "ai_require_approval": self.ai_require_approval,

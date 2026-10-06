@@ -68,10 +68,10 @@ def inspect_host(root, *, profile, terminal_path=None):
         )
         findings.append(
             Finding(
-                "native_feed_contract_and_owner_checks_unverified",
+                "native_feed_contract_and_local_operator_checks_unverified",
                 "blocked",
-                "Actual account kind, source, contracts, currencies, AI/news entitlements, Telegram/TLS "
-                "and broker behavior were NOT contacted or validated.",
+                "MT5 account kind, broker/source identity, symbol contracts and currencies, AI/news "
+                "entitlements, and local-operator procedures were NOT contacted or validated.",
             )
         )
     else:

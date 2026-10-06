@@ -21,14 +21,12 @@ from readiness.preflight_checks import (
     inspect_imports,
     inspect_power,
     inspect_runtime,
-    inspect_telegram_format,
     inspect_terminal,
     inspect_writability,
     probe_ai_provider,
 )
 from tests.preflight_helpers import (
     BOT_TOKEN,
-    OWNER_ID,
     FakePowerRunner,
     assert_no_secret,
     codes,
@@ -180,6 +178,7 @@ def safe_values(**changes):
             "START_PAUSED": "true",
             "DEMO_MODE": "true",
             "BACKTEST_MODE": "false",
+            "AUTONOMOUS_DEMO": "false",
             "MT5_BACKEND": "mock",
         }
     )
@@ -203,15 +202,22 @@ def test_missing_or_empty_required_keys_block_a_private_env_but_not_the_template
     assert codes({"findings": list(findings)})["required_configuration_keys_incomplete"] == "blocked"
     assert observed["required_missing"] == ("SYMBOLS",)
 
-    write_env(tmp_path, "TELEGRAM_BOT_TOKEN=\nTELEGRAM_OWNER_ID=\n", name=".env.example")
+    write_env(tmp_path, "TELEGRAM_BOT_TOKEN=\nTELEGRAM_REPORT_CHAT_ID=\n", name=".env.example")
     findings, observed = inspect_env_keys(tmp_path, env_name=".env.example")
     assert codes({"findings": list(findings)})["required_configuration_keys_incomplete"] == "not_checked"
-    assert set(observed["required_empty"]) == {"TELEGRAM_BOT_TOKEN", "TELEGRAM_OWNER_ID"}
+    assert observed["required_empty"] == ()
+    assert {"TELEGRAM_BOT_TOKEN", "TELEGRAM_REPORT_CHAT_ID"}.issubset(observed["blank_allowed_keys_observed"])
 
 
 @pytest.mark.parametrize(
     "key,value",
-    [("LIVE_TRADING", "true"), ("PAPER_TRADING", "false"), ("START_PAUSED", "false"), ("DEMO_MODE", "false")],
+    [
+        ("LIVE_TRADING", "true"),
+        ("PAPER_TRADING", "false"),
+        ("START_PAUSED", "false"),
+        ("DEMO_MODE", "false"),
+        ("AUTONOMOUS_DEMO", "true"),
+    ],
 )
 def test_changed_safe_defaults_are_observed_and_blocked_never_rewritten(tmp_path, key, value):
     values = safe_values(**{key: value})
@@ -239,48 +245,11 @@ def test_duplicate_interpolated_or_binary_environment_is_refused(tmp_path, text)
 
 
 def test_secret_values_are_masked_and_never_hashed_or_partially_echoed(tmp_path):
-    write_env(tmp_path, f"TELEGRAM_BOT_TOKEN={BOT_TOKEN}\nTELEGRAM_OWNER_ID={OWNER_ID}\nSYMBOLS=EURUSD\n")
+    write_env(tmp_path, f"TELEGRAM_BOT_TOKEN={BOT_TOKEN}\nTELEGRAM_REPORT_CHAT_ID=123\nSYMBOLS=EURUSD\n")
     findings, observed = inspect_env_keys(tmp_path, env_name=".env")
     document = {"findings": list(findings), "observations": observed}
     assert_no_secret(document | {"secret_values_printed": False})
-    assert BOT_TOKEN not in dumped(document) and OWNER_ID not in dumped(document)
-
-
-# ---------------------------------------------------------------- telegram format
-
-
-def test_valid_formats_pass_without_any_api_call(monkeypatch):
-    forbid_transports(monkeypatch)
-    findings, observed = inspect_telegram_format(
-        {"TELEGRAM_BOT_TOKEN": BOT_TOKEN, "TELEGRAM_OWNER_ID": OWNER_ID}
-    )
-    assert codes({"findings": list(findings)})["telegram_format_valid"] == "passed"
-    assert observed["telegram_api_calls"] == 0 and observed["owner_authenticated"] is False
-    assert_no_secret({"findings": list(findings), "observations": observed, "secret_values_printed": False})
-
-
-@pytest.mark.parametrize(
-    "token,owner,code",
-    [
-        ("not-a-token", OWNER_ID, "telegram_token_format_invalid"),
-        (BOT_TOKEN, "0", "telegram_owner_id_format_invalid"),
-        (BOT_TOKEN, "-42", "telegram_owner_id_format_invalid"),
-        (BOT_TOKEN, "owner-name", "telegram_owner_id_format_invalid"),
-        (BOT_TOKEN, "", "telegram_pair_incomplete"),
-        ("", OWNER_ID, "telegram_pair_incomplete"),
-    ],
-)
-def test_invalid_or_partial_owner_credentials_block_without_a_request(monkeypatch, token, owner, code):
-    forbid_transports(monkeypatch)
-    findings, observed = inspect_telegram_format({"TELEGRAM_BOT_TOKEN": token, "TELEGRAM_OWNER_ID": owner})
-    assert codes({"findings": list(findings)})[code] == "blocked"
-    assert observed["telegram_api_calls"] == 0
-
-
-def test_absent_credentials_are_not_checked_and_remain_the_safe_default():
-    findings, observed = inspect_telegram_format({})
-    assert codes({"findings": list(findings)})["telegram_credentials_absent"] == "not_checked"
-    assert observed["token_format_valid"] is False and observed["owner_authenticated"] is False
+    assert BOT_TOKEN not in dumped(document)
 
 
 # ---------------------------------------------------------------- AI provider probe

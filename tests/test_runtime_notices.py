@@ -1,133 +1,163 @@
-"""Claim-before-send runtime notices with artificial transport; never Telegram."""
+"""Local-first runtime notices and bounded HTTPS sendMessage-only reports."""
 
 import asyncio
-from datetime import timedelta
-from types import SimpleNamespace as NS
-from unittest.mock import AsyncMock
+import json
 
+import httpx
 import pytest
-from sqlalchemy import select
 
-from app.notifications import TEXT, RuntimeNotices
+from app.notifications import RuntimeNotices
+from app.reporter import MAX_TEXT, Reporter
 from core.database import Database
-from core.models import AuditLog
 from tests.risk_helpers import MOMENT, config
 from trading.types import ManualClock
+
+TOKEN = "123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef"
 
 
 @pytest.fixture
 def system(tmp_path):
-    s = config(tmp_path)
-    d = Database(s)
-    d.initialize()
-    c = ManualClock(MOMENT)
-    services = NS(settings=s, database=d, clock=c, preview_only=False)
-    transport = NS(services=services, bot=NS(send_message=AsyncMock(return_value=NS(message_id=1))))
-    yield RuntimeNotices(d, s, c), transport
-    d.close()
+    settings = config(tmp_path, telegram_bot_token=TOKEN, telegram_report_chat_id="123")
+    database = Database(settings)
+    database.initialize()
+    clock = ManualClock(MOMENT)
+    sent = []
 
+    def handler(request):
+        sent.append(request)
+        return httpx.Response(200, json={"ok": True})
 
-@pytest.mark.parametrize("kind", list(TEXT))
-async def test_fixed_kind_notifications_are_owner_only_and_never_permission(system, kind):
-    notices, transport = system
-    key = notices.enqueue(kind, dedup="TEST_ONLY")
-    assert notices.enqueue(kind, dedup="TEST_ONLY") == key
-    result = await notices.drain(transport)
-    assert result == {"delivered": 1, "uncertain": 0}
-    transport.bot.send_message.assert_awaited_once()
-    kwargs = transport.bot.send_message.call_args.kwargs
-    assert kwargs["chat_id"] == notices.settings.telegram_owner_id and kwargs["parse_mode"] is None
-    assert not {"token", "password", "account"}.intersection(kwargs)
-    assert (await notices.drain(transport))["delivered"] == 0
-
-
-async def test_attempt_exists_before_network_callback(system):
-    notices, transport = system
-    notices.enqueue("restart", dedup="TEST_ONLY")
-
-    async def send(**kwargs):
-        with notices.database.session() as db:
-            assert db.scalar(select(AuditLog.id).where(AuditLog.action == "runtime.notice_attempted"))
-            assert db.scalar(select(AuditLog.id).where(AuditLog.action == "runtime.notice_delivered")) is None
-
-    transport.bot.send_message.side_effect = send
-    assert (await notices.drain(transport))["delivered"] == 1
-
-
-@pytest.mark.parametrize("error", [TimeoutError, RuntimeError])
-async def test_possible_delivery_is_never_retried_after_restart(system, error):
-    notices, transport = system
-    notices.enqueue("stalled", dedup="TEST_ONLY")
-    transport.bot.send_message.side_effect = error("PRIVATE_TOKEN_DO_NOT_LOG")
-    assert (await notices.drain(transport))["uncertain"] == 1
-    restarted = RuntimeNotices(notices.database, notices.settings, notices.clock)
-    assert (await restarted.drain(transport))["uncertain"] == 0
-    assert transport.bot.send_message.await_count == 1
-    with notices.database.session() as db:
-        assert "PRIVATE_TOKEN_DO_NOT_LOG" not in str(
-            [row.details for row in db.scalars(select(AuditLog)).all()]
-        )
-        assert db.scalar(select(AuditLog.id).where(AuditLog.action == "runtime.notice_delivered")) is None
-
-
-async def test_cancellation_is_uncertain_and_not_resubmittable(system):
-    notices, transport = system
-    notices.enqueue("restart", dedup="TEST_ONLY")
-    transport.bot.send_message.side_effect = asyncio.CancelledError()
-    with pytest.raises(asyncio.CancelledError):
-        await notices.drain(transport)
-    assert not notices.claim_batch()
-
-
-async def test_simultaneous_drains_have_one_durable_claim(system):
-    notices, transport = system
-    notices.enqueue("started", dedup="TEST_ONLY")
-    a, b = await asyncio.gather(notices.drain(transport), notices.drain(transport))
-    assert a["delivered"] + b["delivered"] == 1 and transport.bot.send_message.await_count == 1
-
-
-async def test_old_claimed_rows_do_not_starve_new_notices(system):
-    notices, transport = system
-    for i in range(20):
-        notices.enqueue("job_failed", dedup=str(i))
-        assert notices.claim_batch(limit=1)
-    notices.enqueue("restart", dedup="NEW_TEST_ONLY")
-    assert (await notices.drain(transport, limit=1))["delivered"] == 1
-
-
-async def test_expired_and_wrong_scope_do_not_send(system, tmp_path):
-    notices, transport = system
-    notices.enqueue("started", dedup="EXPIRED_TEST_ONLY")
-    notices.clock.advance(timedelta(hours=25))
-    assert (await notices.drain(transport))["delivered"] == 0
-    different = config(tmp_path, max_daily_trades=11)
-    other = RuntimeNotices(notices.database, different, notices.clock)
-    other.enqueue("restart", dedup="OTHER_SCOPE_TEST_ONLY")
-    assert (await notices.drain(transport))["delivered"] == 0
-    transport.bot.send_message.assert_not_awaited()
-
-
-@pytest.mark.parametrize("field,value", [("preview_only", True), ("database", object()), ("clock", object())])
-async def test_mismatched_transport_refused_before_claim(system, field, value):
-    notices, transport = system
-    setattr(transport.services, field, value)
-    notices.enqueue("restart", dedup="TEST_ONLY")
-    with pytest.raises(ValueError):
-        await notices.drain(transport)
-    transport.bot.send_message.assert_not_awaited()
+    reporter = Reporter(
+        settings,
+        secrets=(*database.secrets, "PRIVATE_TOKEN_DO_NOT_LOG"),
+        transport=httpx.MockTransport(handler),
+        clock=clock,
+        console=lambda _: None,
+    )
+    yield RuntimeNotices(database, settings, clock, reporter), sent
+    database.close()
 
 
 @pytest.mark.parametrize(
-    "kind,dedup", [("resume", "x"), ("started", ""), ("started", "x" * 129), ("started", 1)]
+    "kind",
+    [
+        "started",
+        "restart",
+        "stalled",
+        "budget",
+        "job_failed",
+        "stopped",
+        "daily_report",
+        "learning_candidate",
+        "auto_resumed",
+    ],
 )
-def test_notice_input_is_fixed_bounded_local_seam(system, kind, dedup):
-    notices, transport = system
+async def test_fixed_runtime_notices_are_local_first_and_use_sendmessage_only(system, kind):
+    notices, sent = system
+    notices.enqueue(kind, dedup="TEST_ONLY")
+    assert notices.enqueue(kind, dedup="TEST_ONLY") is None
+    result = await notices.drain(limit=10)
+    assert result["sent"] == 1 and result["queued"] == 0
+    assert len(sent) == 1
+    request = sent[0]
+    assert request.method == "POST"
+    assert request.url.scheme == "https" and request.url.host == "api.telegram.org"
+    assert request.url.path == f"/bot{TOKEN}/sendMessage" and not request.url.query
+    payload = json.loads(request.content)
+    assert payload["chat_id"] == 123 and payload["parse_mode"] is None
+    assert len(payload["text"]) <= MAX_TEXT
+    assert set(payload) == {"chat_id", "text", "parse_mode", "disable_web_page_preview"}
+    reports = notices.reporter.reports_dir
+    assert (reports / "actions.log").is_file()
+    assert len(list(reports.glob("????-??-??.jsonl"))) == 1
+
+
+async def test_remote_failure_is_isolated_local_record_survives_and_is_not_retried(tmp_path):
+    settings = config(tmp_path, telegram_bot_token=TOKEN, telegram_report_chat_id="123")
+    database = Database(settings)
+    database.initialize()
+    count = []
+
+    def fail(request):
+        count.append(request)
+        raise RuntimeError("PRIVATE_TOKEN_DO_NOT_LOG")
+
+    reporter = Reporter(
+        settings,
+        secrets=("PRIVATE_TOKEN_DO_NOT_LOG",),
+        transport=httpx.MockTransport(fail),
+        console=lambda _: None,
+    )
+    notices = RuntimeNotices(database, settings, ManualClock(MOMENT), reporter)
+    try:
+        notices.enqueue("stalled", dedup="TEST_ONLY", details={"raw": "PRIVATE_TOKEN_DO_NOT_LOG"})
+        first = await notices.drain()
+        second = await notices.drain()
+        assert first["uncertain"] == 1 and second["uncertain"] == 0
+        assert len(count) == 1
+        local = (reporter.reports_dir / "actions.log").read_text(encoding="utf-8")
+        assert "PRIVATE_TOKEN_DO_NOT_LOG" not in local
+    finally:
+        database.close()
+
+
+async def test_cancellation_claims_report_before_network_and_never_resubmits(tmp_path):
+    settings = config(tmp_path, telegram_bot_token=TOKEN, telegram_report_chat_id="123")
+    database = Database(settings)
+    database.initialize()
+
+    def cancel(request):
+        raise asyncio.CancelledError()
+
+    reporter = Reporter(
+        settings,
+        transport=httpx.MockTransport(cancel),
+        console=lambda _: None,
+    )
+    notices = RuntimeNotices(database, settings, ManualClock(MOMENT), reporter)
+    notices.enqueue("restart", dedup="TEST_ONLY")
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            await notices.drain()
+        assert not reporter.outbox
+        assert (await notices.drain())["sent"] == 0
+    finally:
+        database.close()
+
+
+async def test_simultaneous_drains_claim_an_inmemory_report_once(system):
+    notices, sent = system
+    notices.enqueue("started", dedup="TEST_ONLY")
+    a, b = await asyncio.gather(notices.drain(), notices.drain())
+    assert a["sent"] + b["sent"] == 1 and len(sent) == 1
+
+
+async def test_missing_report_config_is_harmless_and_local(tmp_path):
+    settings = config(tmp_path)
+    database = Database(settings)
+    database.initialize()
+    reporter = Reporter(settings, console=lambda _: None)
+    notices = RuntimeNotices(database, settings, ManualClock(MOMENT), reporter)
+    try:
+        notices.enqueue("started", dedup="TEST_ONLY")
+        result = await notices.drain()
+        assert result["disabled"] == 1 and result["sent"] == 0
+        assert (reporter.reports_dir / "actions.log").is_file()
+    finally:
+        database.close()
+
+
+@pytest.mark.parametrize(
+    "kind,dedup", [("resume", "x"), ("started", ""), ("started", "x" * 257), ("started", 1)]
+)
+def test_notice_input_is_fixed_bounded_and_cannot_encode_control(kind, dedup, system):
+    notices, _ = system
     with pytest.raises(ValueError):
         notices.enqueue(kind, dedup=dedup)
 
 
-@pytest.mark.parametrize("limit", [0, 11, True, 1.5])
-def test_claim_bound_enforced(system, limit):
-    notices, transport = system
+@pytest.mark.parametrize("limit", [0, 21, True, 1.5])
+async def test_report_batch_bound_enforced(system, limit):
+    notices, _ = system
     with pytest.raises(ValueError):
-        notices.claim_batch(limit)
+        await notices.drain(limit=limit)

@@ -14,14 +14,14 @@ Flow for every consultation::
 * **Retries** – ENTRY decisions retry transient failures up to AI_MAX_RETRIES times INSIDE the
   AI_TIMEOUT_SECONDS budget (one circuit failure per decision). Trailing (2 s) never retries.
 * **Fallback** – owner-controlled AI_FALLBACK_MODE (DB override via /ai_fallback_block,
-  /ai_fallback_technical or the Mini App, else the setting):
+  `python -m scripts.ops ai-fallback`, else the setting):
   BLOCK_ON_AI_FAILURE (default) => no new entry while the AI cannot answer ("ai_blocked");
   TECHNICAL_ONLY => the deterministic Technical Signal Score (>= AI_RULE_FALLBACK_MIN_SCORE).
   Mechanical trailing and protective exits continue in BOTH modes. A VALID AI "wait"/low
   confidence is final and never shopped past.
 * **Gate** – an action is executable only if confidence >= AI_CONFIDENCE_THRESHOLD and every hard
   limit passes. The brain can only ADD vetoes or REDUCE risk: it never sends orders itself and never
-  bypasses the risk engine, news gates, stage gates, owner pause or the kill switch.
+  bypasses the risk engine, news gates, stage gates, local pause or the kill switch.
 """
 
 from __future__ import annotations
@@ -74,6 +74,7 @@ class ProviderModel(str):
 
 def label_of(model) -> str | None:
     return getattr(model, "label", None)
+
 
 FAILURES = (
     AIUnavailable,
@@ -328,8 +329,10 @@ class AIBrain:
         deep = build_role(settings, "deep", **common) if provider is not None else None
         brain = cls(settings, clock, provider=provider, deep_provider=deep, **kwargs)
         trailing = build_role(settings, "trailing", **common)
-        if trailing is not None and settings.ai_providers and any(
-            e.role == "trailing" for e in settings.ai_registry() if e.enabled
+        if (
+            trailing is not None
+            and settings.ai_providers
+            and any(e.role == "trailing" for e in settings.ai_registry() if e.enabled)
         ):
             brain.trailing_provider = trailing
         return brain
@@ -629,8 +632,11 @@ class AIBrain:
         return result
 
     def rule_fallback_allowed(self) -> bool:
-        """RULE_FALLBACK entries need ALL of: AI_REQUIRE_APPROVAL=false, AI_RULE_FALLBACK_ENABLED=true
-        and the owner TECHNICAL_ONLY mode. Otherwise an AI failure is ``no_ai_approval``."""
+        """RULE_FALLBACK entries need AI_REQUIRE_APPROVAL=false and AI_RULE_FALLBACK_ENABLED=true.
+
+        The local operator must also select TECHNICAL_ONLY mode. Otherwise an AI failure is
+        ``no_ai_approval``.
+        """
         cfg = self.settings
         return (
             not cfg.ai_require_approval
@@ -671,7 +677,7 @@ class AIBrain:
         except FAILURES:
             return None, None
         if reply.pause_recommended and reply.confidence >= self.settings.ai_confidence_threshold:
-            # Advisory pause = an extra ENTRY veto window. Never touches owner pause/kill state.
+            # Advisory pause = an extra ENTRY veto window. Never touches local pause/kill state.
             self.pause_advisory_until = self.clock.now() + timedelta(minutes=30)
         return reply, model
 
@@ -702,8 +708,10 @@ def _hard_limit_view() -> dict:
             "risk_percent_per_trade": str(HARD_MAX_RISK_PERCENT),
         },
         "increase_rule": "raise trades/positions/risk only in a strong trend with low news risk",
-        "owner_approval": "changes over 50 percent of the owner default need owner approval",
-        "kill_switch": "owner-only (not adjustable)",
+        "local_review": (
+            "changes over 50 percent of the reviewed default remain pending for local operator review"
+        ),
+        "kill_switch": "not adjustable by AI; typed local operator action only",
     }
 
 

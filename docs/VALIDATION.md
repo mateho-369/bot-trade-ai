@@ -1,6 +1,8 @@
-# Validation record — cumulative Parts 1–14
+# Historical validation record — cumulative Parts 1–14
 
-Date **2026-10-04**. Current source **0.12.0 / schema 2** (15 tables retained).
+Superseded by Part 16 (`docs/PART_16.md`) and `docs/RELEASE_16_MANIFEST.json`. The results below describe the source and environment at the time; they are not verification of current source.
+
+Date **2026-10-04**. Source at that time **0.12.0 / schema 2** (15 tables retained).
 Linux Python 3.13.14 / exact requirements.linux.lock.txt / Ruff 0.16.10 is the executed
 development environment. No actual Windows/NTFS/session/broker/provider/Telegram/owner/
 strategy/native/deployment/stage/live qualification. No authentic model/corpus/history

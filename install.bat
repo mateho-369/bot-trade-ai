@@ -1,5 +1,5 @@
 @echo off
-rem MT5 AI ReflexBot - one-time installer. Paper/mock defaults; never connects a broker or trades.
+rem MT5 AI ReflexBot - prompt-free dependency installer. It never starts a broker or runtime.
 setlocal
 cd /d "%~dp0"
 title MT5 AI ReflexBot - install
@@ -21,7 +21,7 @@ if exist ".env" goto :envready
 copy /Y ".env.example" ".env" >nul
 if errorlevel 1 goto :fail
 echo Created .env from .env.example.
-echo Edit .env now: TELEGRAM_BOT_TOKEN, TELEGRAM_OWNER_ID and OPENAI_API_KEY - your Groq key.
+echo Edit .env if using paper/mock; for native autonomous DEMO use scripts\setup_demo.ps1.
 goto :configure
 :envready
 echo Existing .env kept unchanged.
@@ -32,15 +32,13 @@ if errorlevel 1 goto :fail
 if errorlevel 1 goto :fail
 echo.
 echo Install complete.
-echo Safety defaults: LIVE_TRADING=false, PAPER_TRADING=true, START_PAUSED=true, MT5_BACKEND=mock.
+echo Safety defaults: LIVE_TRADING=false, AUTONOMOUS_DEMO=false, START_PAUSED=true, MT5_BACKEND=mock.
 echo AI_FALLBACK_MODE=BLOCK_ON_AI_FAILURE: without a working Groq key NO trades are opened.
-echo Next: edit .env, then run start.bat - paper/mock - or start_demo.bat - MT5 demo data, paper orders.
-pause
+echo Next: use start.bat for reviewed paper/mock, or scripts\setup_demo.ps1 for native autonomous DEMO.
 exit /b 0
 :nopython
 echo The Python launcher "py" was not found. Install Python 3.11 x64 from python.org, then rerun.
 :fail
 echo.
 echo INSTALL FAILED - see the messages above. Nothing was started.
-pause
 exit /b 1

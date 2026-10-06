@@ -8,7 +8,8 @@ from sqlalchemy import select
 from ai.suggestion_store import SuggestionStore
 from core.database import Database
 from core.models import AISuggestion, BotState, RiskState
-from tests.risk_helpers import MOMENT, OWNER, config
+from core.security import sha256_json
+from tests.risk_helpers import BAD_OPERATOR, MOMENT, OWNER, config
 from trading.risk_types import RuntimeProfile
 from trading.types import ManualClock, SourceKind, TradingDisabled
 
@@ -30,12 +31,51 @@ def make(store, **kwargs):
     )
 
 
+def test_local_proposal_listing_is_bounded_and_decision_is_hash_fenced(store):
+    first = make(store)
+    second = store.create(
+        "reduce_risk",
+        {"risk_percent": "0.3"},
+        reason="Second local review.",
+        request_hash="b" * 64,
+    )
+    assert [row.suggestion_id for row in store.list(limit=1)] == [second.suggestion_id]
+    assert store.list(status="pending", limit=10)[0].status == "pending"
+    with pytest.raises(TradingDisabled):
+        store.list(limit=51)
+    with pytest.raises(TradingDisabled):
+        store.decide(
+            first.suggestion_id,
+            operator=OWNER,
+            approve=True,
+            expected_payload_hash="f" * 64,
+        )
+    assert store.get(first.suggestion_id).status == "pending"
+    result = store.decide(
+        first.suggestion_id,
+        operator=OWNER,
+        approve=True,
+        expected_payload_hash=sha256_json(first.payload()),
+    )
+    assert result.status == "approved"
+
+
+def test_proposal_listing_reports_expiry_without_mutating_persisted_state(store):
+    suggestion = make(store)
+    store.clock.advance(timedelta(seconds=3601))
+    listed = store.list(status="expired")
+    assert listed[0].suggestion_id == suggestion.suggestion_id and listed[0].status == "expired"
+    with store.database.session() as session:
+        assert session.get(AISuggestion, suggestion.suggestion_id).status == "pending"
+    assert store.get(suggestion.suggestion_id).status == "expired"
+
+
 def test_owner_projection_is_new_frozen_settings_and_preserves_latches(store):
     suggestion = make(store)
     assert suggestion.status == "pending"
     with pytest.raises(TradingDisabled):
-        store.apply(suggestion.suggestion_id, owner_id=OWNER)
-    store.decide(suggestion.suggestion_id, owner_id=OWNER, approve=True)
+        store.apply(suggestion.suggestion_id, operator=OWNER)
+    store.decide(suggestion.suggestion_id, operator=OWNER, approve=True)
     with store.database.session() as s:
         state = s.get(BotState, 1)
         state.kill_switch_active = True
@@ -53,7 +93,7 @@ def test_owner_projection_is_new_frozen_settings_and_preserves_latches(store):
                 drawdown_latched=True,
             )
         )
-    changed = store.apply(suggestion.suggestion_id, owner_id=OWNER)
+    changed = store.apply(suggestion.suggestion_id, operator=OWNER)
     assert changed.effective_risk_percent == Decimal(
         ".2"
     ) and store.settings.effective_risk_percent == Decimal(".5")
@@ -69,7 +109,7 @@ def test_owner_projection_is_new_frozen_settings_and_preserves_latches(store):
         )
     assert store.get(suggestion.suggestion_id).status == "applied"
     with pytest.raises(TradingDisabled):
-        store.apply(suggestion.suggestion_id, owner_id=OWNER)
+        store.apply(suggestion.suggestion_id, operator=OWNER)
     assert not (store.settings.project_root / ".env").exists()
 
 
@@ -126,19 +166,21 @@ def test_owner_expiry_integrity_and_stopped_guard(store, fault):
     if fault in {"wrong_owner", "bool_owner"}:
         with pytest.raises(TradingDisabled):
             store.decide(
-                suggestion.suggestion_id, owner_id=OWNER + 1 if fault == "wrong_owner" else True, approve=True
+                suggestion.suggestion_id,
+                operator=BAD_OPERATOR if fault == "wrong_owner" else True,
+                approve=True,
             )
         return
     if fault == "expired":
         store.clock.advance(timedelta(seconds=3601))
         assert store.get(suggestion.suggestion_id).status == "expired"
         with pytest.raises(TradingDisabled):
-            store.decide(suggestion.suggestion_id, owner_id=OWNER, approve=True)
+            store.decide(suggestion.suggestion_id, operator=OWNER, approve=True)
         return
-    store.decide(suggestion.suggestion_id, owner_id=OWNER, approve=True)
+    store.decide(suggestion.suggestion_id, operator=OWNER, approve=True)
     if fault == "decision_flip":
         with pytest.raises(TradingDisabled):
-            store.decide(suggestion.suggestion_id, owner_id=OWNER, approve=False)
+            store.decide(suggestion.suggestion_id, operator=OWNER, approve=False)
         return
     with store.database.session() as s:
         state = s.get(BotState, 1)
@@ -161,7 +203,7 @@ def test_owner_expiry_integrity_and_stopped_guard(store, fault):
                 )
             )
     with pytest.raises(TradingDisabled):
-        store.apply(suggestion.suggestion_id, owner_id=OWNER)
+        store.apply(suggestion.suggestion_id, operator=OWNER)
 
 
 def test_bounded_owner_weight_change_and_close_never_executes(store):
@@ -172,20 +214,20 @@ def test_bounded_owner_weight_change_and_close_never_executes(store):
         reason="Independent revalidation needed.",
         request_hash="a" * 64,
     )
-    store.decide(suggestion.suggestion_id, owner_id=OWNER, approve=True)
-    changed = store.apply(suggestion.suggestion_id, owner_id=OWNER)
+    store.decide(suggestion.suggestion_id, operator=OWNER, approve=True)
+    changed = store.apply(suggestion.suggestion_id, operator=OWNER)
     assert sum(changed.strategy_weights.values()) == 1 and changed.strategy_weights["trend"] == Decimal(".32")
     assert changed.max_risk_percent_per_trade == store.settings.max_risk_percent_per_trade
     close = store.create(
         "close_position",
         {"trade_id": 1, "position_identifier": 2, "position_hash": "b" * 64, "fraction": "1"},
-        reason="Owner-only close proposal.",
+        reason="Local-operator-only close proposal.",
         request_hash="c" * 64,
         ttl_seconds=30,
     )
-    store.decide(close.suggestion_id, owner_id=OWNER, approve=True)
+    store.decide(close.suggestion_id, operator=OWNER, approve=True)
     with pytest.raises(TradingDisabled):
-        store.apply(close.suggestion_id, owner_id=OWNER)
+        store.apply(close.suggestion_id, operator=OWNER)
 
 
 def test_cross_thread_dedup_and_secret_sanitizing(store):

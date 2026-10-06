@@ -55,14 +55,14 @@ def inspect_semantics(bundle):
     )
     for name in ("promotion_eligible", "live_enabled", "auto_resume_production", "financial_history_reset"):
         check(report[name] is False, "bundle_privilege_claim_refused")
-    for name in ("native_broker_calls", "provider_calls", "telegram_calls"):
+    for name in ("native_broker_calls", "provider_calls", "outbound_report_calls"):
         check(type(report[name]) is int and report[name] == 0, "bundle_external_execution_claim_refused")
     public = run["effective_public_config"]
     check(
         run["secrets_copied"] is False
         and public["mode"] == "backtest"
         and public["backend"] == "mock"
-        and public["telegram_configured"] is False
+        and public["reporter_configured"] is False
         and public["offline_principal_only"] is True,
         "bundle_nonresearch_config_refused",
     )

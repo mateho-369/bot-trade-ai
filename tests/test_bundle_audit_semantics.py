@@ -50,7 +50,7 @@ def test_completed_replay_is_consistent_research_not_stage_or_owner(completed_re
         ("financial_history_reset", True),
         ("native_broker_calls", 1),
         ("provider_calls", False),
-        ("telegram_calls", 1),
+        ("outbound_report_calls", 1),
         ("source", "mt5"),
         ("quote_mode", "ticks_modified"),
         ("dataset_sha256", "a" * 64),

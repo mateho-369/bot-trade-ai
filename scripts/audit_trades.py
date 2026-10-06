@@ -56,8 +56,6 @@ def main(argv=()) -> int:
         report = run(settings, sync=args.sync, limit=max(1, min(args.limit, 100000)))
     except Exception as exc:  # noqa: BLE001 - class name only; never echo config/secrets.
         print(f"Trade audit unavailable ({type(exc).__name__}). No trades were changed.")
-        if isinstance(exc, RuntimeError):
-            print(str(exc))
         return 2
     print(json.dumps(report, indent=2, default=str) if args.json else format_report(report, limit=50))
     return 0 if report["clean"] else 1

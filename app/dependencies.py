@@ -13,7 +13,7 @@ from sqlalchemy.engine import make_url
 from ai.ai_supervisor import AISupervisor
 from ai.model_registry import ModelRegistry
 from app.notifications import RuntimeNotices
-from app.owner_services import OwnerServices
+from app.reporter import Reporter
 from core.settings import OperatingMode
 from news.news_manager import NewsManager
 from strategy.signal_engine import SignalEngine
@@ -36,12 +36,11 @@ class RuntimeResources:
     signals: SignalEngine
     supervisor: AISupervisor
     news: NewsManager
-    owner: OwnerServices
     positions: PositionManager
+    reporter: Reporter
     notices: RuntimeNotices
-    telegram: object = None
     ai_first: object = None  # ai.ai_first.AIFirstLayer when AI_FIRST_ENABLED=true
-    alerts: object = None  # app.alerts.AlertCenter (owner alert center)
+    alerts: object = None  # app.alerts.AlertCenter
 
 
 def compose(settings, database, *, broker=None):
@@ -66,19 +65,12 @@ def compose(settings, database, *, broker=None):
     engine = ExecutionEngine(broker, database, settings, profile=profile)
     news = NewsManager(database, settings, broker.clock, profile)
     supervisor = AISupervisor(database, settings, broker.clock, profile)
-    owner = OwnerServices(
-        database,
-        settings,
-        clock=broker.clock,
-        execution=engine,
-        suggestions=supervisor.suggestions,
-        news=news,
-    )
+    reporter = Reporter(settings, secrets=database.secrets, clock=broker.clock)
     ai_first = None
     if settings.ai_first_enabled:
         from ai.ai_first import AIFirstLayer
 
-        ai_first = AIFirstLayer(database, settings, broker, engine, supervisor)
+        ai_first = AIFirstLayer(database, settings, broker, engine, supervisor, reporter=reporter)
     adaptive = ai_first.trailing if ai_first is not None and settings.ai_adaptive_trailing_enabled else None
     from app.alerts import AlertCenter
 
@@ -88,29 +80,19 @@ def compose(settings, database, *, broker=None):
     if ai_first is not None:
         ai_first.alerts = alerts
     return RuntimeResources(
-        settings,
-        database,
-        broker,
-        engine,
-        SignalEngine(broker, database, settings, profile=profile),
-        supervisor,
-        news,
-        owner,
-        PositionManager(engine, adaptive=adaptive),
-        RuntimeNotices(database, settings, broker.clock),
+        settings=settings,
+        database=database,
+        broker=broker,
+        engine=engine,
+        signals=SignalEngine(broker, database, settings, profile=profile),
+        supervisor=supervisor,
+        news=news,
+        positions=PositionManager(engine, adaptive=adaptive),
+        reporter=reporter,
+        notices=RuntimeNotices(database, settings, broker.clock, reporter),
         ai_first=ai_first,
         alerts=alerts,
     )
-
-
-def attach_telegram(resources):
-    cfg = resources.settings
-    if not cfg.runtime_telegram_enabled or not cfg.telegram_bot_token.get_secret_value():
-        return None
-    from telegram_bot.bot import TelegramOwnerTransport
-
-    resources.telegram = TelegramOwnerTransport(resources.owner)
-    return resources.telegram
 
 
 def require_existing_database(settings):

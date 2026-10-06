@@ -8,7 +8,8 @@ Options:
 
 Steps: venv, install, .env check, init-db (only if no database), resolve_symbols,
 check_mt5_readonly (terminal must report a DEMO account), news probe, preflight,
-then the watchdog is started. The bot always starts PAUSED; resume from Telegram with /resume.
+then the watchdog is started without a prompt. The bot starts PAUSED and autonomous recovery uses
+the same reconciliation and safety gates as local resume. Stop/operate with python -m scripts.ops.
 No key or password is ever printed.
 #>
 [CmdletBinding()]
@@ -52,17 +53,17 @@ Step '3/9 Demo configuration (.env)'
 if (-not (Test-Path -LiteralPath '.env')) {
     Copy-Item -LiteralPath '.env.demo.example' -Destination '.env'
     Write-Host 'Created .env from .env.demo.example.' -ForegroundColor Yellow
-    Write-Host 'Fill TELEGRAM_BOT_TOKEN, TELEGRAM_OWNER_ID and OPENAI_API_KEY (your Groq key), save,'
-    Write-Host 'keep MT5 open and logged in to your Exness DEMO account, then run this script again.'
-    Start-Process -FilePath 'notepad.exe' -ArgumentList '.env'
+    Write-Host 'Edit .env and set OPENAI_API_KEY (your Groq key); Telegram reporting is optional.'
+    Write-Host 'Keep MT5 open and logged in to your Exness DEMO account, then run this script again.'
     exit 0
 }
 Invoke-Python @('main.py', 'check-config') 'check-config'
 $guard = "import sys; from core.settings import Settings; s = Settings(_env_file='.env'); " +
-    "ok = s.mode.value == 'demo' and not s.live_trading and s.start_paused and s.mt5_backend == 'real'; " +
+    "ok = s.mode.value == 'demo' and not s.live_trading and not s.paper_trading and " +
+    "s.start_paused and s.autonomous_demo and s.ai_require_approval and not s.demo_fast_track and s.mt5_backend == 'real'; " +
     "print('mode:', s.mode.value, '| live:', s.live_trading, '| start_paused:', s.start_paused, " +
-    "'| demo_fast_track:', s.demo_fast_track); sys.exit(0 if ok else 3)"
-Invoke-Python @('-c', $guard) 'Demo safety check (needs DEMO_MODE=true, PAPER_TRADING=false, LIVE_TRADING=false, START_PAUSED=true, MT5_BACKEND=real)'
+    "'| autonomous_demo:', s.autonomous_demo, '| fast_track:', s.demo_fast_track); sys.exit(0 if ok else 3)"
+Invoke-Python @('-c', $guard) 'DEMO safety check (requires AUTONOMOUS_DEMO=true, AI_REQUIRE_APPROVAL=true, DEMO_FAST_TRACK=false and actual DEMO broker mode)'
 
 Step '4/9 Database'
 if (Test-Path -LiteralPath 'data\reflexbot.db') {
@@ -101,10 +102,11 @@ if ($NoStart) {
     Write-Host 'All checks passed. -NoStart given: the bot was not started.' -ForegroundColor Green
     exit 0
 }
-if (Test-Path -LiteralPath 'data\runtime\operator-stop.json') {
-    Fail 'An operator stop request exists (data\runtime\operator-stop.json). Review it and delete it first.'
-}
+$stopCheck = "import sys; from core.settings import Settings; from app.process_guard import operator_stop_requested; " +
+    "sys.exit(3 if operator_stop_requested(Settings(_env_file='.env')) else 0)"
+& $py -c $stopCheck
+if ($LASTEXITCODE -ne 0) { Fail 'Persistent local stop request is active; review and clear it with python -m scripts.ops clear-stop.' }
 Start-Process -FilePath $py -ArgumentList @('watchdog.py', '--env-file', '.env') -WindowStyle Minimized
-Write-Host 'Bot started PAUSED in a minimized window. Logs: data\logs\bot.log' -ForegroundColor Green
-Write-Host 'In Telegram: /status, then /resume (one-time confirmation). /ai_stats and /audit any time.'
+Write-Host 'Watchdog started in a minimized window; runtime stays PAUSED until reconciliation and all configured gates pass.' -ForegroundColor Green
+Write-Host 'Local reports: data\reports\actions.log. View: python -m scripts.live_view. Controls: python -m scripts.ops --help.'
 exit 0

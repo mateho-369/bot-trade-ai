@@ -5,6 +5,7 @@ import pytest
 from sqlalchemy import select
 
 from core.database import Database
+from core.local_operator import LocalOperator
 from core.models import BotState, BrokerDeal, RiskState
 from tests.risk_helpers import MOMENT, D, config, safe_context
 from trading.authorization import BrokerSnapshot
@@ -328,9 +329,12 @@ def test_delayed_deposit_ledger_does_not_double_adjust_peak_and_requires_review(
 
     control = RuntimeControl(db, cfg, clock)
     control.claim()
-    control.review_flat_baseline(42, account_key=snapshot.account.key, confirm="REVIEW_SAMPLED_BASELINE")
-    control.acknowledge_recovery(42, account_key=snapshot.account.key, broker_writes_quarantined=False)
-    control.resume(42, account_key=snapshot.account.key)
+    operator = LocalOperator.current()
+    control.review_flat_baseline(
+        operator, account_key=snapshot.account.key, confirm="REVIEW_SAMPLED_BASELINE"
+    )
+    control.acknowledge_recovery(operator, account_key=snapshot.account.key, broker_writes_quarantined=False)
+    control.resume(operator, account_key=snapshot.account.key)
     control.release()
 
 

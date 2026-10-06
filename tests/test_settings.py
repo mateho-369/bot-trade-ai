@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from core.settings import OperatingMode, Settings
+from core.settings import OperatingMode, Settings, live_trading_requested
 
 
 def config(**values):
@@ -17,6 +17,8 @@ def test_safe_defaults():
     assert settings.mt5_backend == "mock"
     assert settings.demo_mode and settings.start_paused and settings.require_stage_gates
     assert not settings.live_trading
+    assert not settings.autonomous_demo
+    assert settings.auto_resume_max_per_day == 3
     assert settings.live_max_risk_percent_per_trade == Decimal("0.1")
 
 
@@ -25,6 +27,15 @@ def test_complete_env_example_is_valid():
     assert settings.mode == OperatingMode.PAPER
     assert settings.symbols == ("XAUUSD", "BTCUSD", "EURUSD", "GBPUSD", "ETHUSD")
     assert settings.trailing_levels == ((30, 30), (60, 60), (90, 90))
+    assert settings.autonomous_demo is False
+
+
+def test_demo_example_enables_only_gated_autonomous_demo():
+    settings = Settings(_env_file=Path(__file__).resolve().parents[1] / ".env.demo.example")
+    assert settings.autonomous_demo is True
+    assert settings.start_paused is True and settings.require_stage_gates is True
+    assert settings.ai_require_approval is True
+    assert not settings.live_trading
 
 
 @pytest.mark.parametrize(
@@ -44,19 +55,22 @@ def test_ambiguous_or_unsafe_flags_are_rejected(flags):
         config(**flags)
 
 
-def test_explicit_modes_do_not_imply_authorization():
+def test_explicit_modes_do_not_imply_authorization_and_live_is_refused():
     assert config(backtest_mode=True, paper_trading=False).mode == OperatingMode.BACKTEST
-    assert config(paper_trading=False, mt5_backend="real").mode == OperatingMode.DEMO
-    live = config(
-        live_trading=True,
-        demo_mode=False,
-        paper_trading=False,
-        mt5_backend="real",
-        telegram_bot_token="123:test-token",
-        telegram_owner_id=123,
-    )
-    assert live.mode == OperatingMode.LIVE
-    assert live.public_config()["startup"] == "paused"
+    demo = config(paper_trading=False, mt5_backend="real")
+    assert demo.mode == OperatingMode.DEMO and demo.public_config()["startup"] == "paused"
+    with pytest.raises(ValidationError, match="LIVE_TRADING=true is refused"):
+        config(live_trading=True, demo_mode=False, paper_trading=False, mt5_backend="real")
+
+
+def test_live_trading_plain_text_preflight_detects_true_only(tmp_path):
+    env = tmp_path / ".env"
+    env.write_text("LIVE_TRADING=true\n")
+    assert live_trading_requested(env)
+    env.write_text("LIVE_TRADING=false\n")
+    assert not live_trading_requested(env)
+    env.write_text("# LIVE_TRADING=true\nLIVE_TRADING = 0\n")
+    assert not live_trading_requested(env)
 
 
 @pytest.mark.parametrize(
@@ -73,16 +87,42 @@ def test_explicit_modes_do_not_imply_authorization():
         {"trailing_levels": "30:40"},
         {"symbols": "XAUUSD,XAUUSD"},
         {"symbols": "../secret"},
-        {"telegram_bot_token": "token-without-owner"},
         {"log_file": "../outside.log"},
         {"ollama_base_url": "http://remote.example"},
         {"openai_base_url": "http://remote.example/v1"},
-        {"API_TRUSTED_HOSTS_JSON": ["*"]},
     ],
 )
 def test_risk_and_security_configuration_rejected(values):
     with pytest.raises(ValidationError):
         config(**values)
+
+
+def test_removed_telegram_control_and_owner_api_settings_are_absent():
+    removed = {
+        "telegram_owner_id",
+        "telegram_initdata_max_age_seconds",
+        "telegram_initdata_max_bytes",
+        "telegram_use_webhook",
+        "runtime_telegram_enabled",
+        "runtime_api_enabled",
+        "api_trusted_hosts",
+    }
+    assert removed.isdisjoint(Settings.model_fields)
+
+
+def test_autonomous_demo_requires_ai_approval_and_cannot_be_live():
+    settings = config(autonomous_demo=True)
+    assert settings.autonomous_demo and settings.ai_require_approval
+    with pytest.raises(ValidationError, match="AI_REQUIRE_APPROVAL=true"):
+        config(autonomous_demo=True, ai_require_approval=False)
+    with pytest.raises(ValidationError):
+        config(
+            autonomous_demo=True,
+            live_trading=True,
+            demo_mode=False,
+            paper_trading=False,
+            mt5_backend="real",
+        )
 
 
 def test_config_is_frozen():
@@ -92,8 +132,8 @@ def test_config_is_frozen():
 
 
 def test_secrets_excluded_from_public_config_and_hash():
-    first = config(telegram_bot_token="123:TOP-SECRET-A", telegram_owner_id=123)
-    second = config(telegram_bot_token="123:TOP-SECRET-B", telegram_owner_id=123)
+    first = config(telegram_bot_token="123:TOP-SECRET-A", telegram_report_chat_id="123")
+    second = config(telegram_bot_token="123:TOP-SECRET-B", telegram_report_chat_id="123")
     assert "TOP-SECRET" not in str(first.public_config())
     assert first.safety_fingerprint() == second.safety_fingerprint()
     assert first.safety_fingerprint() != config(max_daily_trades=11).safety_fingerprint()
@@ -116,19 +156,20 @@ def test_nested_config_is_read_only():
     assert isinstance(settings.rss_urls, tuple)
 
 
-def test_stage_fingerprint_spans_modes_but_approval_fingerprint_does_not():
-    paper = config(telegram_bot_token="123:test-token", telegram_owner_id=123)
-    live = config(
+def test_stage_fingerprint_spans_paper_and_demo_but_safety_hash_does_not():
+    paper = config(telegram_bot_token="123:test-token", telegram_report_chat_id="123")
+    demo = config(
         telegram_bot_token="123:test-token",
-        telegram_owner_id=123,
-        live_trading=True,
-        demo_mode=False,
+        telegram_report_chat_id="123",
         paper_trading=False,
         mt5_backend="real",
     )
-    assert paper.strategy_fingerprint() == live.strategy_fingerprint()
-    assert paper.safety_fingerprint() != live.safety_fingerprint()
-    assert live.effective_risk_percent == Decimal("0.1")
+    assert paper.strategy_fingerprint() == demo.strategy_fingerprint()
+    assert paper.safety_fingerprint() != demo.safety_fingerprint()
+    assert demo.effective_risk_percent == Decimal("0.5")
+    assert (
+        paper.safety_fingerprint() == config(telegram_report_chat_id="@reports_channel").safety_fingerprint()
+    )
 
 
 def test_lower_r_targets_require_explicit_lower_reward_risk_floor():

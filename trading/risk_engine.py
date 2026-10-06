@@ -97,6 +97,8 @@ class RiskEngine:
                     "last_effective_equity": str(effective),
                     "last_observed_at": now.isoformat(),
                     "currency": account.currency,
+                    "account_kind": account.kind.value,
+                    "account_source": account.source.value,
                     "last_balance": str(account.balance),
                     "balance_anchor_cash": str(cash_total),
                     "balance_anchor_realized": str(realized_total),
@@ -117,6 +119,7 @@ class RiskEngine:
                 },
             )
         metadata = dict(row.metadata_json)
+        metadata.update(account_kind=account.kind.value, account_source=account.source.value)
         prior_daily, prior_drawdown = row.daily_loss_latched, row.drawdown_latched
         if metadata.get("currency") not in (None, account.currency):
             raise TradingDisabled("risk baseline account currency changed")
@@ -417,7 +420,7 @@ class RiskEngine:
                 if item.request.get("context")
             ):
                 reasons.append("signal_already_reserved_or_executed")
-        # Layer-1 AI-dynamic limits (owner defaults unless the AI is available) inside layer-2 caps.
+        # Layer-1 AI-dynamic limits (reviewed defaults unless the AI is available) inside layer-2 caps.
         limits = effective_limits(self.database, cfg, self.clock, session=session)
         percentage = context.risk_percent if context.risk_percent is not None else limits.risk_percent
         if percentage > max(cfg.effective_risk_percent, limits.risk_percent):

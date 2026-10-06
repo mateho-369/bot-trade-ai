@@ -8,7 +8,6 @@ from core.models import BotState, DeploymentEvidence
 from scripts.backtest import main as backtest_cli
 from scripts.make_backtest_fixture import main as fixture_cli
 from scripts.stage_report import main as stage_cli
-from scripts.synthetic_owner_fixtures import signed_fixture
 from tests.backtest_helpers import fixture_path
 from tests.test_backtest_promotion import sample as invented_stage  # noqa: F401 -- explicit pytest fixture
 
@@ -78,18 +77,14 @@ def test_stage_cli_requires_existing_schema_and_never_initializes_it(tmp_path, c
     assert '"grants_live": false' in capsys.readouterr().out
 
 
-def test_stage_cli_accepts_only_signed_fixture_digest_as_local_software_test(request, monkeypatch, capsys):
-    # Artificial file/native flags/bearer. This is NOT actual owner/stage qualification.
+def test_stage_cli_accepts_current_local_operator_digest_as_software_test(request, monkeypatch, capsys):
+    # Artificial file/native flags/local operator. This is NOT actual stage qualification.
     cfg, db, clock, _, path = request.getfixturevalue("invented_stage")
     env = cfg.project_root / ".env"
     env.write_text(
         "DEMO_MODE=true\nLIVE_TRADING=false\nPAPER_TRADING=true\nMT5_BACKEND=real\n"
-        "SYMBOLS=EURUSD\nTELEGRAM_OWNER_ID=42\n"
-        "TELEGRAM_BOT_TOKEN=123456789:TEST_ONLY_NEVER_CONTACT_TELEGRAM\n"
-        "MAX_SLIPPAGE_POINTS=2\nATR_TRAILING_ENABLED=false\n"
+        "SYMBOLS=EURUSD\nMAX_SLIPPAGE_POINTS=2\nATR_TRAILING_ENABLED=false\n"
     )
-    signed = cfg.project_root / "TEST_ONLY_OWNER.initdata"
-    signed.write_text(signed_fixture(cfg, clock) + "\n")
     monkeypatch.setattr("scripts.stage_report.SystemClock", lambda: clock)
     assert (
         stage_cli(
@@ -101,8 +96,6 @@ def test_stage_cli_accepts_only_signed_fixture_digest_as_local_software_test(req
                 str(path),
                 "--confirm-sha256",
                 hashlib.sha256(path.read_bytes()).hexdigest(),
-                "--owner-initdata-file",
-                str(signed),
             ]
         )
         == 0

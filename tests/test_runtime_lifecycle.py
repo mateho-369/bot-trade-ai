@@ -1,7 +1,6 @@
 """Real SQLite/synthetic lifecycle; no deployment or native/Telegram/provider I/O."""
 
 import asyncio
-from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
@@ -9,13 +8,9 @@ from sqlalchemy import select
 
 from app.dependencies import compose
 from app.lifecycle import RuntimeLifecycle
-from app.owner_identity import OwnerInterfaceError
 from app.process_guard import ProcessLock, operator_stop_requested, read_json, request_operator_stop
 from core.database import Database
 from core.models import BotState, RiskState
-from scripts.synthetic_owner_fixtures import SyntheticTelegramSession
-from telegram_bot.bot import TelegramOwnerTransport
-from tests.owner_helpers import actor
 from tests.risk_helpers import MOMENT, OWNER, config, open_one
 from trading.mock_mt5 import MockMT5Client
 from trading.types import ManualClock, TradingDisabled
@@ -24,8 +19,6 @@ from trading.types import ManualClock, TradingDisabled
 def prepare(tmp_path, **values):
     settings = config(
         tmp_path,
-        runtime_api_enabled=False,
-        runtime_telegram_enabled=False,
         runtime_backup_enabled=False,
         ai_provider="disabled",
         ai_fallback_provider="disabled",
@@ -46,7 +39,7 @@ async def test_start_stop_is_paused_durable_and_no_transport(tmp_path):
     await service.start()
     r = service.resources
     assert r.database.status()["state"] == "paused" and service.health.state == "ready"
-    assert service.api is None and r.telegram is None
+    assert r.reporter.enabled is False and not hasattr(service, "api")
     before = r.engine.control.session_id
     r.engine.control.resume(OWNER, account_key=r.engine.account_key)
     await service.stop()
@@ -135,46 +128,6 @@ async def test_persistent_operator_stop_is_never_implicitly_cleared(tmp_path):
     assert operator_stop_requested(service.settings)
 
 
-async def test_actual_owner_close_drains_before_resources_close(tmp_path):
-    service = prepare(tmp_path)
-    await service.start()
-    r = service.resources
-    try:
-        await open_one(r.engine)
-        r.engine.control.pause(OWNER)
-        position = (await r.engine.capture_owned_positions())[0]
-        who, key = actor(r.owner), str(uuid4())
-        args = {"ticket": position.ticket, "position_identifier": position.identifier}
-        challenge = await r.owner.action(who, "close_position", args, key)
-        entered, release = asyncio.Event(), asyncio.Event()
-        original = r.broker.close_position
-
-        async def blocked(*values, **kwargs):
-            entered.set()
-            await release.wait()
-            return await original(*values, **kwargs)
-
-        r.broker.close_position = blocked
-        action = asyncio.create_task(
-            r.owner.action(who, "close_position", args, key, challenge["confirmation_token"])
-        )
-        await entered.wait()
-        stopping = asyncio.create_task(service.stop())
-        await asyncio.sleep(0.05)
-        assert not stopping.done() and service.lock.handle is not None and r.owner.closing
-        with pytest.raises(OwnerInterfaceError, match="runtime_stopping"):
-            await r.owner.action(who, "resume", {}, str(uuid4()))
-        release.set()
-        result = await action
-        assert result["status"] == "completed"
-        await stopping
-        assert service._closed
-    finally:
-        if not service._closed:
-            release.set()
-            await service.stop()
-
-
 async def test_native_pending_evidence_holds_database_and_os_lock(tmp_path):
     service = prepare(tmp_path)
     await service.start()
@@ -223,30 +176,6 @@ async def test_system_shutdown_pause_is_session_fenced_not_a_latch_reset(tmp_pat
         await service.stop()
 
 
-async def test_shutdown_during_telegram_initial_read_never_starts_polling(tmp_path):
-    service = prepare(tmp_path)
-    await service.start()
-    r = service.resources
-    transport = TelegramOwnerTransport(r.owner, session=SyntheticTelegramSession(r.broker.clock))
-    entered, release = asyncio.Event(), asyncio.Event()
-
-    async def webhook_info():
-        entered.set()
-        await release.wait()
-        return type("Info", (), {"url": ""})()
-
-    transport.bot.get_webhook_info = webhook_info
-    transport.dispatcher.start_polling = AsyncMock()
-    task = asyncio.create_task(transport.poll())
-    await entered.wait()
-    r.owner.closing = True
-    release.set()
-    await task
-    transport.dispatcher.start_polling.assert_not_awaited()
-    await transport.close()
-    await service.stop()
-
-
 async def test_pause_persistence_failure_still_fences_jobs_before_shutdown_retry(tmp_path):
     service = prepare(tmp_path)
     await service.start()
@@ -260,7 +189,7 @@ async def test_pause_persistence_failure_still_fences_jobs_before_shutdown_retry
     try:
         with pytest.raises(OSError):
             await service.stop()
-        assert r.owner.closing and not service.scheduler.accepting
+        assert not service.scheduler.accepting
         assert (await service.scheduler.run_job("signals"))["state"] == "skipped"
         assert service.lock.handle is not None
     finally:

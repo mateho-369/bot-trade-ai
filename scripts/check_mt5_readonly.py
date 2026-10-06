@@ -80,7 +80,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
     except BrokerError as exc:
-        print(json.dumps({"error": type(exc).__name__, "detail": str(exc), "real_orders_sent": 0}))
+        print(json.dumps({"error": type(exc).__name__, "detail_printed": False, "real_orders_sent": 0}))
         return 2
     print(json.dumps(report, indent=2))
     return 0
