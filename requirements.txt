@@ -1,4 +1,5 @@
-# Direct dependencies pinned to an available, Python 3.11-compatible baseline.
+# CPython 3.11+ baseline. As of 2026-10-06, pandas/NumPy/scikit-learn/LightGBM/MetaTrader5 pins
+# publish Windows x64 artifacts for CPython 3.14; ta==0.11.0 is source-only.
 # Telegram is optional outbound-only sendMessage reporting; no bot/API server is installed.
 # Generate and audit a platform-specific transitive lock after validation;
 # do not reuse a Linux lock for the Windows MT5 deployment.

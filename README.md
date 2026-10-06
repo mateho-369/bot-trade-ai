@@ -26,7 +26,7 @@ Open positions retain broker-side SL/TP; local trailing cannot run while the bot
 
 ## Windows setup and exact start steps
 
-1. Install Python 3.11 x64 and MetaTrader 5; log in to the intended **DEMO** account.
+1. Install 64-bit CPython 3.11–3.14 and MetaTrader 5; the setup scripts choose the newest installed version in that range. Log in to the intended **DEMO** account.
 2. From the repository folder run in PowerShell:
    ```powershell
    powershell -ExecutionPolicy Bypass -File scripts\setup_demo.ps1

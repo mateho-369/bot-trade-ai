@@ -38,10 +38,22 @@ function Invoke-Python([string[]]$arguments, [string]$what) {
 Step '1/9 Python virtual environment'
 if (-not (Test-Path -LiteralPath $py)) {
     if (-not (Get-Command py -ErrorAction SilentlyContinue)) {
-        Fail 'The Python launcher "py" was not found. Install Python 3.11 x64 from python.org.'
+        Fail 'The Python launcher "py" was not found. Install Python 3.11 or newer x64 from python.org.'
     }
-    & py -3.11 -m venv .venv
-    if ($LASTEXITCODE -ne 0) { Fail 'Could not create .venv with Python 3.11.' }
+    $pythonVersion = $null
+    foreach ($candidate in @('3.14', '3.13', '3.12', '3.11')) {
+        & py "-$candidate" -c "import struct,sys; sys.exit(0 if struct.calcsize('P') == 8 else 1)" *> $null
+        if ($LASTEXITCODE -eq 0) {
+            $pythonVersion = $candidate
+            break
+        }
+    }
+    if (-not $pythonVersion) {
+        Fail 'No supported 64-bit Python runtime found (tried 3.14, 3.13, 3.12 and 3.11). Install Python 3.11 or newer x64.'
+    }
+    Write-Host "Creating .venv with Python $pythonVersion ..."
+    & py "-$pythonVersion" -m venv .venv
+    if ($LASTEXITCODE -ne 0) { Fail "Could not create .venv with Python $pythonVersion." }
 }
 Write-Host 'OK: .venv'
 

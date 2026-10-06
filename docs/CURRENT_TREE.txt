@@ -403,7 +403,8 @@ mt5_ai_reflex_bot/
 │   ├── test_trade_logger.py
 │   ├── test_trading_contracts.py
 │   ├── test_trading_diagnostics.py
-│   └── test_trailing_engine.py
+│   ├── test_trailing_engine.py
+│   └── test_windows_launchers.py
 ├── trading/
 │   ├── .gitkeep
 │   ├── __init__.py

@@ -7,7 +7,7 @@ profitability, stage eligibility or LIVE permission. This release refuses LIVE s
 ## Source and host
 
 - [ ] Verify the exact release manifest against an independently trusted digest and inspect source.
-- [ ] Install Python 3.11 x64 and pinned dependencies on a dedicated supported Windows host.
+- [ ] Install 64-bit CPython 3.11–3.14 and pinned dependencies on a dedicated supported Windows host.
 - [ ] Review NTFS ACLs for source, `.env`, database, runtime marker, reports, logs and backups. Keep the
       terminal and runtime under a limited interactive user; no Session 0 service.
 - [ ] Verify vendor origin/signature and exact path of `terminal64.exe`; confirm OS patching, storage,

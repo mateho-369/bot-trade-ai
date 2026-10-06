@@ -2,16 +2,17 @@
 
 ## Scope and host model
 
-The supported native target is an interactive Windows 10/11 x64 user session running Python 3.11 x64 and
-the official MetaTrader 5 terminal. A Windows service/session-0 install is not supported. This source
+The supported native target is an interactive Windows 10/11 x64 user session running 64-bit CPython
+3.11–3.14 and the official MetaTrader 5 terminal. `install.bat` and `setup_demo.ps1` select the newest
+installed version in that range. A Windows service/session-0 install is not supported. This source
 refuses `LIVE_TRADING=true`. `.env.demo.example` opts into `AUTONOMOUS_DEMO=true`, requires
 `AI_REQUIRE_APPROVAL=true`, leaves `START_PAUSED=true` and `DEMO_FAST_TRACK=false`, and selects native
 MT5 with `PAPER_TRADING=false`. The MT5 terminal's reported account kind must be DEMO.
 
 ## First setup
 
-1. Install Python 3.11 x64 and MT5. In the terminal, sign in to the intended DEMO account and keep the
-   terminal open. Verify the account and server yourself.
+1. Install 64-bit CPython 3.11–3.14 and MT5. In the terminal, sign in to the intended DEMO account and
+   keep the terminal open. Verify the account and server yourself.
 2. Open PowerShell in the repository root and run:
    ```powershell
    powershell -ExecutionPolicy Bypass -File scripts\setup_demo.ps1
@@ -28,6 +29,10 @@ MT5 with `PAPER_TRADING=false`. The MT5 terminal's reported account kind must be
 
 `setup_demo.ps1` and both `.bat` launchers do not ask questions. Configuration errors stop before runtime
 start. Do not run setup or start in a second window when a watchdog/runtime already owns the lease.
+
+### CPython 3.14 Windows x64 package artifacts
+
+PyPI was checked on 2026-10-06 for the exact pinned artifacts: [pandas 3.0.6](https://pypi.org/project/pandas/3.0.6/), [NumPy 2.4.6](https://pypi.org/project/numpy/2.4.6/), and [scikit-learn 1.9.1](https://pypi.org/project/scikit-learn/1.9.1/) publish `cp314-cp314-win_amd64` wheels; [LightGBM 4.7.0](https://pypi.org/project/lightgbm/4.7.0/) publishes `py3-none-win_amd64`; and [MetaTrader5 5.0.6231](https://pypi.org/project/metatrader5/5.0.6231/) publishes `cp314-cp314-win_amd64`. No pins were changed. `ta==0.11.0` publishes an sdist rather than a wheel; its package is Python source and pip builds it during installation. This artifact check is not a Windows install or runtime qualification.
 
 ## Start and recovery invariants
 

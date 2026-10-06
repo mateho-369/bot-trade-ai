@@ -18,7 +18,7 @@ soak only.
 
 ## Run
 
-1. Install Python 3.11 and the project dependencies. Copy `.env.example` to `.env` and review the
+1. Install 64-bit CPython 3.11–3.14 and the project dependencies. Copy `.env.example` to `.env` and review the
    settings/paths. The generic `install.bat` creates the DB if missing but never starts a runtime.
 2. Run `start.bat` once from the repository folder. Startup remains PAUSED through reconciliation.
 3. Inspect local state periodically:

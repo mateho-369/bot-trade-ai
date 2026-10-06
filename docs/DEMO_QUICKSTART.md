@@ -7,7 +7,7 @@ No setup or start step asks interactive questions.
 
 ## First setup and start
 
-1. Install Python 3.11 x64 and MetaTrader 5. Log MT5 in to the intended **DEMO** account and keep it open.
+1. Install 64-bit CPython 3.11–3.14 and MetaTrader 5. The scripts select the newest installed Python in that range. Log MT5 in to the intended **DEMO** account and keep it open.
 2. Open PowerShell in the repository folder and run:
    ```powershell
    powershell -ExecutionPolicy Bypass -File scripts\setup_demo.ps1

@@ -21,10 +21,10 @@
     16
   ],
   "archive_root": "mt5_ai_reflex_bot",
-  "packaged_files": 429,
-  "hashed_files": 428,
-  "python_sources": 303,
-  "pytest_passed": 2451,
+  "packaged_files": 430,
+  "hashed_files": 429,
+  "python_sources": 304,
+  "pytest_passed": 2453,
   "part16_scope": [
     "shared_resume_gates_and_autonomous_demo_recovery",
     "local_operator_controls_and_ops_cli",
@@ -60,8 +60,8 @@
       "bytes": 14344
     },
     "README.md": {
-      "sha256": "302b598f2a752cf999549ce185d85735a84ff53988458900bf1106ce5862ed2f",
-      "bytes": 6097
+      "sha256": "b8e84bd3d5a4d17377a051184e067558f07bca0c6b39421473fe5a416ef79774",
+      "bytes": 6177
     },
     "ai/.gitkeep": {
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
@@ -396,20 +396,20 @@
       "bytes": 24055
     },
     "docs/CURRENT_TREE.txt": {
-      "sha256": "35f4101a4947ec42b253efeaa267564b1c986b9bed1b5f2883aa5c95a091033b",
-      "bytes": 16410
+      "sha256": "37d8968c672fac79fb65c00f9826f0b3648cd009522091192b4c96c9e8e7af85",
+      "bytes": 16452
     },
     "docs/DEMO_QUICKSTART.md": {
-      "sha256": "f31647c2be3da0563c59bd89acdb0a06c283a30e0f9576548cd872be1a97c2b0",
-      "bytes": 4716
+      "sha256": "5fc43c4156880ada9b87f0eeb1a72fc69e073c149f4e67dba81ca43a4d59d24a",
+      "bytes": 4789
     },
     "docs/DEPLOYMENT_SCRIPT_SOURCE_CHECKS.json": {
       "sha256": "d46a6b53a47e6f8ac4c07dbab9c6826f2b3d5b0eb8b28d4e73c92b2fd28b6401",
       "bytes": 429
     },
     "docs/DEPLOYMENT_WINDOWS.md": {
-      "sha256": "be92a9ec68f316c68b2ad25befeffb3fbff82b318bb9a6a76accb09fde271713",
-      "bytes": 5263
+      "sha256": "d8d91542a55ace8fe45b2133fb2acb88b9a31bb1d3f4951139f48340333bb02a",
+      "bytes": 6119
     },
     "docs/MIGRATIONS.md": {
       "sha256": "2ff8ce878d38e1038a261491833379d5af14da60f1b2fdb834ddc7a4dacdf10c",
@@ -420,8 +420,8 @@
       "bytes": 10960
     },
     "docs/NATIVE_VALIDATION_CHECKLIST.md": {
-      "sha256": "ade23e0f3e2148da29d1e3a91cd47c3ffb40452e3259f6a07c4984f94b87b333",
-      "bytes": 3856
+      "sha256": "d766debb1af1315fe618f02c4f2fb70919e53882b54bb4d8a3e8a452eda6a100",
+      "bytes": 3867
     },
     "docs/OPERATOR_PLAYBOOK.md": {
       "sha256": "9131f6c17f5107aad4c77ab6ccc95855828111a2900c383e7f95e09048e61c9f",
@@ -524,8 +524,8 @@
       "bytes": 9600
     },
     "docs/PART_16.md": {
-      "sha256": "3fd21824e6f5b9cced1be5df61bda681ed5abb44f189b755b6a1e5b3e395299e",
-      "bytes": 3570
+      "sha256": "8e9d1ddf880a892b14bf88c7784a2d6dcd336d48b27b404b7e9e5df8d561f8f6",
+      "bytes": 3682
     },
     "docs/READINESS.md": {
       "sha256": "5b0b572533f06883d4066751e5951ed9a13395ce3f0eaa684ce172a3fe686122",
@@ -604,12 +604,12 @@
       "bytes": 1294
     },
     "docs/TARGET_TREE.txt": {
-      "sha256": "b73c16ab52c5387622fc366042b2a410ab7aa1a85d3f9c9cf3c183ea510584ce",
-      "bytes": 16307
+      "sha256": "5f62c1dd29b5db86de979fe8341ac5d7179369359ce660eb2e0fa41245aecc0e",
+      "bytes": 16349
     },
     "docs/THREE_DAY_PAPER_TEST.md": {
-      "sha256": "7411fb56f4d5c9985ebc70275eb36e9b1686f8af027f6b63434d571f862a77d4",
-      "bytes": 2646
+      "sha256": "28aefe9c29e250b32934be7e1a001c6fd2313c7d1bc0b9e0800a151f18bf24f7",
+      "bytes": 2661
     },
     "docs/TRAILING_AI_DESIGN.md": {
       "sha256": "ea7930531eb39e3a2686d9a20b02eb751cfdaa8a7c5ab5c9119a403eb8808768",
@@ -796,8 +796,8 @@
       "bytes": 687
     },
     "install.bat": {
-      "sha256": "e803f805cb38853fd4fb0723b692dbfe7d1a937afe15964c63bb6fb6e0c84a60",
-      "bytes": 1680
+      "sha256": "ced54fbc7f9ec506e6dfd703e633de6e66e56273a951a0260951068df9cf5ad4",
+      "bytes": 2331
     },
     "launcher.py": {
       "sha256": "fb00271604050475db5052a3789199c8c85e9bbb7c2cba8206ea8c024963438d",
@@ -908,8 +908,8 @@
       "bytes": 7697
     },
     "requirements.txt": {
-      "sha256": "d1ef8526ce1f572c8a2284d28160bd71a16a1581d75b5501f475a5be95dc23a2",
-      "bytes": 961
+      "sha256": "347fbf37a24feced8e27a59b5153e76dbd11e8f9b4ec1659a8bed58fcb3d6a9c",
+      "bytes": 1055
     },
     "scripts/.gitkeep": {
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
@@ -992,8 +992,8 @@
       "bytes": 2011
     },
     "scripts/setup_demo.ps1": {
-      "sha256": "98d64f06f373609ffef164411eb2c97e57d25184d63fc25d28b70e83225b6611",
-      "bytes": 5639
+      "sha256": "baacfb25eda255020a097f28523a4da1d29aedc9dcca88f94274ab14c84170f0",
+      "bytes": 6215
     },
     "scripts/smoke_ai.py": {
       "sha256": "14b59791fb192650ec56159b7cc871f095da3e2c296fab759eb662ddb48e278d",
@@ -1072,8 +1072,8 @@
       "bytes": 2260
     },
     "start.bat": {
-      "sha256": "1afbe236a8b7dbbe73f2ab120ce717f49883daa76ff26c4013d8c3c661390ec1",
-      "bytes": 1400
+      "sha256": "5828db1c5188eac2ba5982c5d1003ad5e49c6ea833d5c63b3292955c1df15688",
+      "bytes": 1449
     },
     "start_demo.bat": {
       "sha256": "0de50083c71d688cad35af9da8d0b9540a31c4ece1664c46848393eb94be73ea",
@@ -1638,6 +1638,10 @@
     "tests/test_trailing_engine.py": {
       "sha256": "b0280cea97d3c5c15afaeade5b077e08d55a070905d098ef1b8a49813df022e7",
       "bytes": 14609
+    },
+    "tests/test_windows_launchers.py": {
+      "sha256": "c8819d2ab7c2e43c91520436f757f9b18164e1871b217972d6355d84ac5b8a48",
+      "bytes": 1996
     },
     "trading/.gitkeep": {
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
