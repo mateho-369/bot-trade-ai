@@ -89,5 +89,5 @@ def report_markdown(report):
         "This report is NOT `reflex-stage-v1` evidence. Editing a label is not qualification. "
         "An independently reviewed historical stage artifact is still required by the production StageGate; "
         "paper/demo additionally require actual native-source reconciled ledgers and continuous coverage. "
-        "Live also needs a current explicit owner/session approval.\n"
+        "Live also needs a current explicit local operator/stage authorization.\n"
     )

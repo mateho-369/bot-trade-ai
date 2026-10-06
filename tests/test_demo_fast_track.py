@@ -180,6 +180,7 @@ def _env_findings(tmp_path, **changes):
         START_PAUSED="true",
         DEMO_MODE="true",
         BACKTEST_MODE="false",
+        AUTONOMOUS_DEMO="false",
         MT5_BACKEND="real",
     )
     values.update(changes)
@@ -188,9 +189,9 @@ def _env_findings(tmp_path, **changes):
     return {f.code: f.status for f in findings}
 
 
-def test_preflight_accepts_paper_off_only_for_the_demo_fast_track(tmp_path):
-    found = _env_findings(tmp_path, PAPER_TRADING="false", DEMO_FAST_TRACK="true")
-    assert found["demo_fast_track_broker_stage"] == "warning"
+def test_preflight_accepts_paper_off_only_for_a_paused_non_live_demo_stage(tmp_path):
+    found = _env_findings(tmp_path, PAPER_TRADING="false", AUTONOMOUS_DEMO="true")
+    assert found["demo_broker_stage"] == "warning"
     assert "safe_default_changed_in_file" not in found
 
 
@@ -218,11 +219,12 @@ def test_demo_env_template_is_valid_safe_and_secret_free(tmp_path):
     text = (ROOT / ".env.demo.example").read_text(encoding="utf-8")
     filled = text.replace(
         "TELEGRAM_BOT_TOKEN=\n", "TELEGRAM_BOT_TOKEN=123456789:TEST_ONLY_NEVER_CONTACT_TELEGRAM_xx\n"
-    ).replace("TELEGRAM_OWNER_ID=\n", "TELEGRAM_OWNER_ID=123456789\n")
+    ).replace("TELEGRAM_REPORT_CHAT_ID=\n", "TELEGRAM_REPORT_CHAT_ID=123456789\n")
     (tmp_path / ".env").write_text(filled, encoding="utf-8")
     cfg = Settings(_env_file=tmp_path / ".env", project_root=tmp_path)
     assert cfg.mode.value == "demo" and not cfg.live_trading and cfg.start_paused
-    assert cfg.demo_fast_track and cfg.demo_min_lot_only and cfg.news_unavailable_policy == "block"
+    assert not cfg.demo_fast_track and not cfg.demo_min_lot_only and cfg.news_unavailable_policy == "block"
+    assert cfg.autonomous_demo and cfg.ai_require_approval and cfg.start_paused
     assert cfg.ai_require_approval and not cfg.ai_rule_fallback_enabled
     assert [e.label for e in cfg.ai_registry()] == ["groq"]  # Single Groq key = one registry entry.
     assert set(configured_source_ids(cfg)) == set(cfg.news_source_coverage)  # Reviewed default feed.
@@ -246,17 +248,28 @@ def test_setup_demo_script_order_and_guards():
         "scripts.preflight",
         "watchdog.py",
     ]
-    body = text[text.index("Step '1/9"):]  # The header comment also names the steps.
+    body = text[text.index("Step '1/9") :]  # The header comment also names the steps.
     positions = [body.index(item) for item in order]
     assert positions == sorted(positions)
     assert "Test-Path -LiteralPath 'data\\reflexbot.db'" in text  # init-db only without a database
     assert "actual_account_kind -ne 'demo'" in text  # terminal-reported DEMO account required
-    assert "not s.live_trading and s.start_paused" in text
+    assert "not s.live_trading and not s.paper_trading" in text
+    assert "s.start_paused and s.autonomous_demo" in text
+    assert "python -m scripts.ops" in text
     assert "OPENAI_API_KEY=" not in text and "Get-Content" not in text  # never reads/prints secrets
 
 
 def test_demo_quickstart_is_one_page_and_covers_the_essentials():
     text = (ROOT / "docs" / "DEMO_QUICKSTART.md").read_text(encoding="utf-8")
-    assert len(text.splitlines()) <= 70
-    for needle in ("setup_demo.ps1", "AI_PROVIDERS", "api_key_env", "/ai_stats", "/audit", "/resume"):
+    assert len(text.splitlines()) <= 90
+    for needle in (
+        "setup_demo.ps1",
+        "AUTONOMOUS_DEMO=true",
+        "AI_REQUIRE_APPROVAL=true",
+        "scripts.ops",
+        "operator-stop.json",
+        "scripts.live_view",
+        "actions.log",
+        "sendMessage",
+    ):
         assert needle in text

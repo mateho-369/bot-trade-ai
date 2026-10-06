@@ -7,14 +7,14 @@ AdaptiveTrailing (lock-first) and LearningLoop. The scheduler calls its jobs:
 * ``reviewer``               – EntryReviewer used by SignalEngine.evaluate (every signal interval)
 * ``trailing``               – lock-first layer inside PositionManager (every position interval)
 * ``learn_closed_trades``    – learning loop for newly closed trades (every 5 minutes)
-* ``config_review``          – AI config suggestions + owner-decision sync (every 30 minutes)
+* ``config_review``          – AI config suggestions + local-operator decision sync (every 30 minutes)
 * ``nightly_review``         – deep model review + daily AI adjustment summary (daily)
 * ``publish_status``         – AI availability heartbeat for the dynamic limits (every 60 s and on
-                               every circuit open/close); stale/rule => owner default limits
-* ``notifier.drain``         – owner Telegram notifications
+                               every circuit open/close); stale/rule => reviewed default limits
+* queued reports are drained by the bounded runtime notification job
 
-AI_FALLBACK_MODE is resolved per decision from ``trading.ai_controls.fallback_mode`` (owner DB
-override, else the setting), so /ai_fallback_block and /ai_fallback_technical apply without restart.
+AI_FALLBACK_MODE is resolved per decision from ``trading.ai_controls.fallback_mode`` (local database
+override, else the setting), so a reviewed local-operator change applies without restart.
 
 Constructing the layer performs no provider request and no broker write.
 """
@@ -32,8 +32,8 @@ from ai.config_adjuster import AIConfigAdjuster
 from ai.decision_journal import AIDecisionJournal, DecisionJournal
 from ai.learning_loop import LearningLoop
 from ai.market_awareness import MarketAwarenessEngine, PerformanceTracker
+from app.reporter import Reporter
 from core.models import Trade
-from telegram_bot.ai_notifications import AIOwnerNotifier
 from trading.ai_adaptive_trailing import AdaptiveTrailing
 from trading.ai_controls import fallback_mode, publish_ai_status
 from trading.types import BrokerError, ResultStatus, RiskViolation
@@ -42,12 +42,14 @@ EXECUTED = frozenset({ResultStatus.FILLED.value, ResultStatus.PARTIAL.value, Res
 
 
 class AIFirstLayer:
-    def __init__(self, database, settings, broker, engine, supervisor, *, brain=None, provider=None):
+    def __init__(
+        self, database, settings, broker, engine, supervisor, *, brain=None, provider=None, reporter=None
+    ):
         clock = broker.clock
         self.database, self.settings, self.engine, self.clock = database, settings, engine, clock
         self.alerts = None  # Optional app.alerts.AlertCenter attached by the runtime.
         self.journal = DecisionJournal(database, clock)
-        self.notifier = AIOwnerNotifier(settings, secrets=database.secrets, mode_provider=self.fallback_mode)
+        self.notifier = reporter or Reporter(settings, secrets=database.secrets, clock=clock)
         self.adjuster = AIConfigAdjuster(
             database,
             settings,
@@ -101,7 +103,7 @@ class AIFirstLayer:
             database, settings, clock, self.journal, brain=self.brain, adjuster=self.adjuster
         )
 
-    # -- owner controls / status ----------------------------------------------------------------
+    # -- local runtime status ------------------------------------------------------------------
     def fallback_mode(self) -> str:
         return fallback_mode(self.database, self.settings)
 
@@ -114,7 +116,7 @@ class AIFirstLayer:
         try:
             publish_ai_status(self.database, self.clock, mode=mode, detail=detail)
         except Exception:
-            pass  # The 60 s heartbeat repairs it; a stale status already means owner defaults.
+            pass  # The 60 s heartbeat repairs it; a stale status already means reviewed defaults.
         if self.alerts is not None:
             if mode == "ai":
                 self.alerts.emit("WARNING", "AI Provider", "AI provider answering again; AI mode restored")
@@ -178,13 +180,13 @@ class AIFirstLayer:
         self.sync_attribution()
 
     def sync_attribution(self) -> dict:
-        """Who-decided rows + one entry/close Telegram message per trade (idempotent)."""
+        """Decision attribution + one queued local/outbound report per trade (idempotent)."""
         from ai.trade_attribution import sync
 
         return sync(self.database, self.clock, notifier=self.notifier, account_key=self.engine.account_key)
 
     def trade_audit(self) -> dict:
-        """Daily audit: every trade needs a matching valid AI approval; any flag alerts the owner."""
+        """Daily audit: every trade needs a matching valid AI approval; flags are reported locally."""
         from ai.trade_audit import audit_trades, format_report
 
         self.sync_attribution()
@@ -197,12 +199,14 @@ class AIFirstLayer:
                     "Trade Audit",
                     f"Trade audit: {len(report['flags'])} flag(s) in {report['checked']} trades",
                     details=report["counts"],
-                    action="Run /audit for details",
+                    action="Run python -m scripts.audit_trades for details",
                 )
         return {"state": "clean" if report["clean"] else "flagged", **report["counts"]}
 
     async def learn_closed_trades(self, *, limit: int = 5) -> dict:
-        synced = self.adjuster.sync_owner_decisions()  # Owner /approve reaches the overlay within 5 min.
+        synced = (
+            self.adjuster.sync_operator_decisions()
+        )  # Persisted local decisions reach the overlay within 5 min.
         with self.database.session() as session:
             reviewed = set(
                 session.scalars(
@@ -228,7 +232,7 @@ class AIFirstLayer:
         return {"state": "reviewed", "trades": reports, "synced": synced}
 
     async def config_review(self) -> dict:
-        synced = self.adjuster.sync_owner_decisions()
+        synced = self.adjuster.sync_operator_decisions()
         if not self.settings.symbols:
             return {"state": "no_symbols", "synced": synced}
         try:

@@ -343,7 +343,7 @@ class ExecutionEngine:
         """Explicit persisted-signal bridge. Cached outcomes use the ORIGINAL order.
 
         It is not a scheduler or automatic resume. Signal quality approval is
-        separate from owner/risk/stage permission, and no unknown intent is retried.
+        separate from local-operator/risk/stage permission, and no unknown intent is retried.
         """
         from strategy.signal_execution import original_signal_command
         from strategy.signal_store import SignalStore
@@ -411,7 +411,7 @@ class ExecutionEngine:
                 or abs(tick.entry(signal.side) - close) > atr * self.settings.strategy_max_entry_drift_atr
             ):
                 raise TradingDisabled("price moved beyond the approved closed-bar ATR drift; do not chase")
-            # Layer-1 AI-dynamic risk/target (owner defaults when the AI is unavailable). A per-trade
+            # Layer-1 AI-dynamic risk/target (reviewed defaults when the AI is unavailable). A per-trade
             # AI reduction in the reviewed context can only lower it; the risk engine re-checks.
             limits = await asyncio.to_thread(effective_limits, self.database, self.settings, self.clock)
             risk_percent, target_usd = context.risk_percent, None

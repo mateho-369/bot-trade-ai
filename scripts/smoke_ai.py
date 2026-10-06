@@ -24,6 +24,7 @@ from ai.model_trainer import ModelTrainer
 from ai.ollama_client import OllamaClient
 from ai.openai_client import OpenAIClient
 from core.database import Database
+from core.local_operator import LocalOperator
 from core.models import AISuggestion, Trade
 from core.security import sha256_json
 from scripts.smoke_signals import SmokeSettings
@@ -42,8 +43,6 @@ async def run():
             _env_file=None,
             project_root=Path(directory),
             symbols=("EURUSD", "GBPUSD"),
-            telegram_owner_id=1,
-            telegram_bot_token="123456789:FIXTURE_ONLY_NEVER_SENT",
             openai_api_key="FIXTURE_ONLY_NO_HTTP_NETWORK",
             atr_trailing_enabled=False,
         )
@@ -88,7 +87,7 @@ async def run():
                 proposal = session.scalar(select(AISuggestion))
                 proposal_id = proposal.id
                 assert proposal.status == "pending"
-            execution.control.resume(1, account_key=execution.account_key)
+            execution.control.resume(LocalOperator.current(), account_key=execution.account_key)
             filled = await execution.execute_signal(ready.signal_id)
             assert await execution.execute_signal(ready.signal_id) == filled
             position = (await broker.get_positions())[0]
@@ -113,17 +112,23 @@ async def run():
             assert not candidate.active and candidate.scope == "candidate"
             await execution.shutdown()  # Release lease before research selection/projection.
             research = await asyncio.to_thread(
-                registry.activate, candidate.model_id, scope="backtest", owner_id=1
+                registry.activate, candidate.model_id, scope="backtest", operator=LocalOperator.current()
             )
             assert research.active and research.scope == "backtest"
             try:
-                await asyncio.to_thread(registry.activate, candidate.model_id, scope="paper", owner_id=1)
+                await asyncio.to_thread(
+                    registry.activate, candidate.model_id, scope="paper", operator=LocalOperator.current()
+                )
             except TradingDisabled:
                 pass
             else:
                 raise AssertionError("synthetic model must never qualify for native-data paper promotion")
-            await asyncio.to_thread(supervisor.suggestions.decide, proposal_id, owner_id=1, approve=True)
-            projected = await asyncio.to_thread(supervisor.suggestions.apply, proposal_id, owner_id=1)
+            await asyncio.to_thread(
+                supervisor.suggestions.decide, proposal_id, operator=LocalOperator.current(), approve=True
+            )
+            projected = await asyncio.to_thread(
+                supervisor.suggestions.apply, proposal_id, operator=LocalOperator.current()
+            )
             assert projected.effective_risk_percent == Decimal(
                 ".2"
             ) and cfg.effective_risk_percent == Decimal(".5")
@@ -147,7 +152,7 @@ async def run():
                 "candidate_was_inactive": True,
                 "research_only_selection_scope": research.scope,
                 "synthetic_promotion_vetoed": True,
-                "owner_stopped_projection_risk_percent": str(projected.effective_risk_percent),
+                "local_operator_projection_risk_percent": str(projected.effective_risk_percent),
                 "running_settings_were_not_mutated": True,
                 "eligible_stage_evidence": False,
                 "warning": (

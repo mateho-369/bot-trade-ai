@@ -8,7 +8,7 @@ from sqlalchemy import select
 
 from core.database import Database
 from core.models import AuditLog, BrokerDeal, OrderIntent, RiskEvent, RiskState, Trade
-from tests.risk_helpers import OWNER, D, config, make_engine, open_one, safe_context
+from tests.risk_helpers import BAD_OPERATOR, OWNER, D, config, make_engine, open_one, safe_context
 from trading.execution import ExecutionEngine
 from trading.mock_mt5 import MockMT5Client
 from trading.position_manager import PositionManager
@@ -131,7 +131,7 @@ async def test_maintenance_remains_enabled_while_paused_or_killed(engine, contro
     getattr(engine.control, control)(OWNER)
     result = await engine.protect_sl(owned.ticket, owned.identifier, D("1.09900"))
     assert result.status == ResultStatus.FILLED
-    closed = await PositionManager(engine).close(owned.identifier, owner_id=OWNER)
+    closed = await PositionManager(engine).close(owned.identifier, operator=OWNER)
     assert closed.status == ResultStatus.FILLED
     assert await engine.broker.get_positions() == ()
     assert engine.database.status()["state"] in {"paused", "killed"}
@@ -159,7 +159,7 @@ async def test_manually_tagged_position_is_never_adopted_or_closed(engine):
         summary = await engine.reconcile()
         assert summary["ledger_mismatch"] and not engine.logger.owned(engine.account_key)
         with pytest.raises(TradingDisabled):
-            await PositionManager(engine).close(position.identifier, owner_id=OWNER)
+            await PositionManager(engine).close(position.identifier, operator=OWNER)
     finally:
         await foreign.shutdown()
 
@@ -168,7 +168,7 @@ async def test_owner_close_requires_authenticated_owner_and_proved_ids(engine):
     await open_one(engine)
     owned = engine.logger.owned(engine.account_key)[0]
     with pytest.raises(TradingDisabled):
-        await PositionManager(engine).close(owned.identifier, owner_id=OWNER + 1)
+        await PositionManager(engine).close(owned.identifier, operator=BAD_OPERATOR)
     with pytest.raises(TradingDisabled):
         await engine.close_owned(owned.ticket + 1, owned.identifier)
     assert len(await engine.broker.get_positions()) == 1

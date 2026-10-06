@@ -17,6 +17,7 @@ from backtesting.news import ReplayNews
 from core.models import BotState, OrderIntent, RiskState
 from core.settings import Settings
 from tests.backtest_helpers import clone_dataset, document, finalized, fixture_path, runtime
+from tests.risk_helpers import BAD_OPERATOR, OWNER
 from trading.risk_types import RuntimeProfile
 from trading.types import BrokerError, SourceKind, Tick, TradingDisabled
 
@@ -45,15 +46,15 @@ def rows(path):
     return [json.loads(line) for line in path.read_text().splitlines()]
 
 
-async def test_default_research_no_owner_resume_no_approval_no_trade(positive, tmp_path, monkeypatch):
+async def test_default_research_no_operator_resume_no_approval_no_trade(positive, tmp_path, monkeypatch):
     monkeypatch.setattr(socket.socket, "connect", lambda *args: pytest.fail("no network in replay"))
     report = await Backtester(positive, Settings(_env_file=None)).run(tmp_path / "run")
     assert report["metrics"]["closed_trades"] == 0 and not report["simulated_execution_enabled"]
     assert not report["promotion_eligible"] and not report["live_enabled"]
-    assert report["native_broker_calls"] == report["provider_calls"] == report["telegram_calls"] == 0
+    assert report["native_broker_calls"] == report["provider_calls"] == report["outbound_report_calls"] == 0
     assert "ai_unavailable_or_invalid" in report["veto_reasons"]
     metadata = document(tmp_path / "run/run.json")
-    assert not metadata["effective_public_config"]["telegram_configured"]
+    assert not metadata["effective_public_config"]["reporter_configured"]
     assert metadata["effective_public_config"]["offline_principal_only"]
     assert (tmp_path / "run/completion.json").is_file()
     for artifact in (
@@ -100,20 +101,20 @@ async def test_trading_without_explicit_simulation_resume_is_not_permission(posi
     assert not report["simulated_execution_enabled"]
 
 
-async def test_shared_risk_owner_idempotency_and_protective_work_survive_kill(positive, tmp_path):
+async def test_shared_risk_local_operator_idempotency_and_protective_work_survive_kill(positive, tmp_path):
     async with runtime(tmp_path, positive) as (engine, signals, market, news, reviewer, manager):
         proposal = await finalized(signals, news, reviewer)
         assert proposal.approved and proposal.source == SourceKind.HISTORICAL
         assert engine.database.status()["state"] == "paused"
         assert await engine.broker.get_positions() == ()
-        engine.control.resume(engine.settings.telegram_owner_id, account_key=engine.account_key)
+        engine.control.resume(OWNER, account_key=engine.account_key)
         filled = await engine.execute_signal(proposal.signal_id)
         assert await engine.execute_signal(proposal.signal_id) == filled
         position = (await engine.broker.get_positions())[0]
         original_sl = position.sl
         with pytest.raises(TradingDisabled):
-            await manager.close(position.identifier, owner_id=999)
-        engine.control.kill(engine.settings.telegram_owner_id)
+            await manager.close(position.identifier, operator=BAD_OPERATOR)
+        engine.control.kill(OWNER)
         market.clock.advance(timedelta(seconds=1))
         bid = position.tp - Decimal("0.0003")
         market._quotes["EURUSD"] = Tick("EURUSD", bid, bid + Decimal("0.00012"), market.clock.now())
@@ -141,7 +142,7 @@ async def test_generated_historical_entries_require_persisted_signal_not_a_loose
     positive, tmp_path
 ):
     async with runtime(tmp_path, positive) as (engine, signals, market, news, reviewer, _):
-        engine.control.resume(engine.settings.telegram_owner_id, account_key=engine.account_key)
+        engine.control.resume(OWNER, account_key=engine.account_key)
         ready = await finalized(signals, news, reviewer)
         context = replace(ready.context, signal_id=None)
         with pytest.raises(TradingDisabled):
@@ -191,7 +192,7 @@ async def test_ohlc_uses_core_simulation_but_discloses_intrabar_uncertainty(ohlc
 async def test_ohlc_stop_first_gap_fills_and_commissions_use_real_core_book(ohlc, tmp_path, ambiguous, gap):
     async with runtime(tmp_path, ohlc) as (engine, signals, market, news, reviewer, _):
         ready = await finalized(signals, news, reviewer)
-        engine.control.resume(engine.settings.telegram_owner_id, account_key=engine.account_key)
+        engine.control.resume(OWNER, account_key=engine.account_key)
         await engine.execute_signal(ready.signal_id)
         position = (await engine.broker.get_positions())[0]
         bar = next(item for item in ohlc.bars["EURUSD"] if item.time == position.time)
@@ -219,7 +220,7 @@ async def test_ohlc_stop_first_gap_fills_and_commissions_use_real_core_book(ohlc
 async def test_future_ohlc_range_is_not_applied_to_a_newer_position(ohlc, tmp_path):
     async with runtime(tmp_path, ohlc) as (engine, signals, market, news, reviewer, _):
         ready = await finalized(signals, news, reviewer)
-        engine.control.resume(engine.settings.telegram_owner_id, account_key=engine.account_key)
+        engine.control.resume(OWNER, account_key=engine.account_key)
         await engine.execute_signal(ready.signal_id)
         position = (await engine.broker.get_positions())[0]
         past = next(item for item in ohlc.bars["EURUSD"] if item.time == position.time - timedelta(minutes=1))
@@ -256,7 +257,10 @@ async def test_live_env_refused_and_production_history_stops_and_secrets_untouch
     sentinel = production / "history.txt"
     sentinel.write_text("keep capital and owner stops")
     cfg = config(
-        production, mt5_password="", telegram_bot_token="42:TEST_SECRET_NEVER_COPY", telegram_owner_id=42
+        production,
+        mt5_password="",
+        telegram_bot_token="123456789:TEST_SECRET_NEVER_COPY_000000000000",
+        telegram_report_chat_id="42",
     )
     report = await Backtester(positive, cfg, options=opts()).run(tmp_path / "run")
     assert sentinel.read_text() == "keep capital and owner stops"
@@ -365,7 +369,7 @@ async def test_denied_original_signal_is_not_blindly_retried_after_resume(positi
         ready = await finalized(signals, news, reviewer)
         with pytest.raises(TradingDisabled):
             await engine.execute_signal(ready.signal_id)
-        engine.control.resume(engine.settings.telegram_owner_id, account_key=engine.account_key)
+        engine.control.resume(OWNER, account_key=engine.account_key)
         result = await engine.execute_signal(ready.signal_id)
         assert result.status.value == "rejected" and await engine.broker.get_positions() == ()
         with engine.database.session() as session:
@@ -375,7 +379,7 @@ async def test_denied_original_signal_is_not_blindly_retried_after_resume(positi
 async def test_tick_gap_stop_is_worse_market_fill_not_guaranteed_original_sl(positive, tmp_path):
     async with runtime(tmp_path, positive) as (engine, signals, market, news, reviewer, _):
         ready = await finalized(signals, news, reviewer)
-        engine.control.resume(engine.settings.telegram_owner_id, account_key=engine.account_key)
+        engine.control.resume(OWNER, account_key=engine.account_key)
         await engine.execute_signal(ready.signal_id)
         position = (await engine.broker.get_positions())[0]
         market.clock.advance(timedelta(seconds=1))
@@ -391,7 +395,7 @@ async def test_tick_gap_stop_is_worse_market_fill_not_guaranteed_original_sl(pos
 async def test_ohlc_midnight_gap_does_not_erase_loss_from_new_day_baseline(ohlc, tmp_path):
     async with runtime(tmp_path, ohlc) as (engine, signals, market, news, reviewer, _):
         ready = await finalized(signals, news, reviewer)
-        engine.control.resume(engine.settings.telegram_owner_id, account_key=engine.account_key)
+        engine.control.resume(OWNER, account_key=engine.account_key)
         await engine.execute_signal(ready.signal_id)
         position = (await engine.broker.get_positions())[0]
         before = (await engine.broker.get_account_info()).equity

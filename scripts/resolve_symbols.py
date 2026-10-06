@@ -126,7 +126,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         report = asyncio.run(run(settings, suffix=args.suffix, multiplier=args.spread_multiplier))
     except BrokerError as exc:
-        print(json.dumps({"error": type(exc).__name__, "detail": str(exc), "real_orders_sent": 0}))
+        print(json.dumps({"error": type(exc).__name__, "detail_printed": False, "real_orders_sent": 0}))
         return 2
     updates = report.env_updates(settings, refresh_spreads=args.refresh_spreads)
     output = report.to_dict()

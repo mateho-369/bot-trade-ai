@@ -73,7 +73,7 @@ async def test_real_inference_fixed_model_exact_inputs_private_snapshot_not_owne
     assert len(calls) == 1 and report["metrics"]["closed_trades"] == 1
     assert report["model_sha256"] == model_input.manifest.model.artifact.sha256
     assert not report["replay_model"]["midrun_selection"] and not report["promotion_eligible"]
-    assert report["native_broker_calls"] == report["provider_calls"] == report["telegram_calls"] == 0
+    assert report["native_broker_calls"] == report["provider_calls"] == report["outbound_report_calls"] == 0
     assert before == {
         str(path.relative_to(production)): hashlib.sha256(path.read_bytes()).hexdigest()
         for path in production.rglob("*")

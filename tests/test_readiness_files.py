@@ -39,9 +39,9 @@ def test_portable_relative_names_reject_traversal_drive_control_and_windows_alia
 
 @pytest.mark.parametrize(
     "name",
-    ["main.py", ".env.example", "docs/PART_12.md", "tests/test_telegram_initdata.py", "core/__init__.py"],
+    ["main.py", ".env.example", "docs/PART_12.md", "tests/test_ops_cli.py", "core/__init__.py"],
 )
-def test_real_source_names_are_not_confused_with_bearers(name):
+def test_portable_repository_source_names_are_valid(name):
     assert relative_name(name) == name
 
 

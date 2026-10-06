@@ -104,7 +104,7 @@ def make_request(
             "weights": {k: str(v) for k, v in settings.strategy_weights.items()},
             "max_weight_step": str(settings.max_strategy_weight_step),
             "new_trade_authority": False,
-            "owner_approval_required_for_proposals": True,
+            "local_operator_review_required_for_proposals": True,
         },
         "data": data,
     }

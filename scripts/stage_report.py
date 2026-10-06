@@ -1,4 +1,4 @@
-"""Stopped local operator workflow. Import needs fresh signed owner initData, never a raw owner integer."""
+"""Stopped, current-local-operator stage review; no resume/live authorization or broker call."""
 
 from __future__ import annotations
 
@@ -9,9 +9,9 @@ from pathlib import Path
 from sqlalchemy.engine import make_url
 
 from backtesting.contracts import utc_time
-from backtesting.dataset import file_bytes
 from backtesting.promotion import export_ledger_stage, import_reviewed_stage
 from core.database import Database
+from core.local_operator import LocalOperator
 from core.settings import Settings
 from trading.types import SystemClock
 
@@ -33,12 +33,6 @@ def main(argv=None):
     )
     review.add_argument("--report", type=Path, required=True)
     review.add_argument("--confirm-sha256", required=True)
-    review.add_argument(
-        "--owner-initdata-file",
-        type=Path,
-        required=True,
-        help="Private file containing ORIGINAL fresh signed Mini App initData; never pass bearer in argv",
-    )
     args = parser.parse_args(argv)
     database = None
     try:
@@ -68,16 +62,13 @@ def main(argv=None):
                 output=output,
             )
         else:
-            raw = file_bytes(args.owner_initdata_file, limit=settings.telegram_initdata_max_bytes)
-            # Strip a text-file newline only, not signed parameter whitespace or serialization.
-            init_data = raw.decode("ascii", errors="strict").rstrip("\r\n")
             evidence_id = import_reviewed_stage(
                 database,
                 settings,
                 clock,
                 report_path=args.report,
                 confirm_sha256=args.confirm_sha256,
-                owner_init_data=init_data,
+                operator=LocalOperator.current(),
             )
             result = {
                 "evidence_id": evidence_id,

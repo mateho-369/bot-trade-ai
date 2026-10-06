@@ -20,7 +20,7 @@ def test_template_reuses_settings_validation_without_database_or_secrets(tmp_pat
     cfg, findings, data = inspect_settings(root, env_name=".env.example")
     assert cfg is not None and cfg.symbols == ("EURUSD",) and cfg.demo_mode
     assert data["mode"] == "paper" and data["backend"] == "mock" and data["start_paused"]
-    assert not data["telegram_pair_configured"] and not data["mt5_login_triplet_configured"]
+    assert not data["reporter_enabled"] and not data["mt5_login_triplet_configured"]
     assert "configuration_validated" in codes(findings) and not (root / "data").exists()
     assert inventory(root) == before
 
@@ -30,7 +30,7 @@ def test_default_inspection_ignores_private_file_and_all_inherited_credentials(t
     (root / ".env").write_text("NOT VALID CONFIG\nTEST_SECRET_FILE=TEST_ONLY_NEVER_PRINT\n")
     monkeypatch.setenv("LIVE_TRADING", "true")
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "TEST_ONLY_SECRET_ENV_NEVER_TRANSPORT")
-    monkeypatch.setenv("TELEGRAM_OWNER_ID", "42")
+    monkeypatch.setenv("TELEGRAM_REPORT_CHAT_ID", "42")
     cfg, findings, data = inspect_settings(root)
     assert cfg and not cfg.live_trading and not cfg.telegram_bot_token.get_secret_value()
     assert data["runtime_process_override_count"] >= 3 and not data["process_environment_values_used"]
@@ -44,6 +44,24 @@ def test_explicit_file_defeats_os_values_but_reports_runtime_mismatch(tmp_path, 
     monkeypatch.setenv("MAX_DAILY_TRADES", "50")
     cfg, findings, _ = inspect_settings(root, env_name=".env.example")
     assert cfg.max_daily_trades == 12 and "runtime_environment_overrides_present" in codes(findings)
+
+
+@pytest.mark.parametrize(
+    "token,chat_id,enabled",
+    [
+        ("123456:" + "A" * 30, "-10042", True),
+        ("not-a-token", "42", False),
+        ("123456:" + "A" * 30, "invalid chat", False),
+    ],
+)
+def test_optional_report_credentials_require_valid_outbound_formats(tmp_path, token, chat_id, enabled):
+    root, _, _ = source_tree(tmp_path)
+    path = root / ".env"
+    path.write_text(f"TELEGRAM_BOT_TOKEN={token}\nTELEGRAM_REPORT_CHAT_ID={chat_id}\n")
+    path.chmod(0o600)
+    cfg, findings, data = inspect_settings(root, env_name=".env")
+    assert cfg is not None and "configuration_validated" in codes(findings)
+    assert data["reporter_enabled"] is enabled
 
 
 @pytest.mark.parametrize(
@@ -80,8 +98,6 @@ def test_real_dotenv_grammar_preserves_literal_quoted_values_not_shell_execution
         "UNKNOWN_TEST_FIELD=TEST_ONLY_SECRET",
         "MAX_DAILY_TRADES=0",
         "SYMBOLS=../bad",
-        "TELEGRAM_BOT_TOKEN=TEST_ONLY_SECRET",
-        "MT5_PASSWORD=TEST_ONLY_SECRET",
         "NEWS_SOURCE_COVERAGE_JSON={}",
         "MAX_RISK_PERCENT_PER_TRADE=NaN",
     ],
@@ -119,14 +135,13 @@ def test_private_mode_and_path_scope_checked_without_permission_change(tmp_path)
     assert inventory(root) == before
 
 
-def test_native_template_default_mode_and_owner_gates_never_auto_switch_backend(tmp_path):
+def test_native_template_never_auto_switches_backend_without_private_demo_inputs(tmp_path):
     root, _, _ = source_tree(tmp_path)
     cfg, findings, _ = inspect_settings(root, env_name=".env.example", profile="windows_native")
     assert cfg.mt5_backend == "mock" and not cfg.live_trading
     assert {
         "native_private_environment_not_supplied",
         "native_source_configuration_missing",
-        "native_owner_controls_unconfigured",
     }.issubset(codes(findings))
 
 

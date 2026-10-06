@@ -10,9 +10,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from readiness.contracts import InspectionError, Profile, ReportBuilder
+from readiness.contracts import Profile, ReportBuilder
 from readiness.dependencies import inspect_dependencies
-from readiness.files import checked_path, read_bytes
 from readiness.host import inspect_host
 from readiness.integrity import verify_release
 from readiness.preflight_checks import (
@@ -21,12 +20,11 @@ from readiness.preflight_checks import (
     inspect_imports,
     inspect_power,
     inspect_runtime,
-    inspect_telegram_format,
     inspect_terminal,
     inspect_writability,
     probe_ai_provider,
 )
-from readiness.settings_inspection import ENV_MAX_BYTES, dotenv_values, inspect_settings
+from readiness.settings_inspection import inspect_settings
 
 INSPECTOR_ROOT = Path(__file__).absolute().parents[1]
 REQUESTED = (
@@ -50,7 +48,7 @@ def deployment_preflight(
     *,
     profile: Profile = "development",
     env_name: str | None = None,
-    manifest_name="docs/RELEASE_15_MANIFEST.json",
+    manifest_name="docs/RELEASE_16_MANIFEST.json",
     trusted_manifest_sha256=None,
     probe_writes=False,
     check_ai_provider=False,
@@ -71,7 +69,7 @@ def deployment_preflight(
         "network_requests": 0,
         "child_processes_spawned": 0,
         "write_probes_performed": 0,
-        "telegram_api_calls": 0,
+        "outbound_report_network_calls": 0,
         "ai_completion_requests": 0,
         "news_provider_calls": 0,
         "broker_connected": False,
@@ -82,7 +80,6 @@ def deployment_preflight(
         "database_file_modified": False,
         "configuration_modified": False,
         "secret_values_printed": False,
-        "owner_authenticated": False,
         "stage_evidence": False,
     }
     integrity = verify_release(
@@ -123,41 +120,27 @@ def deployment_preflight(
     report.findings.extend(findings)
     report.observations["configuration"] = observations
     if cfg is not None and not cfg.paper_trading:
-        if cfg.demo_fast_track and cfg.mode.value == "demo" and not cfg.live_trading:
-            report.add(
-                "demo_fast_track_broker_stage",
-                "warning",
-                "Owner-approved DEMO_FAST_TRACK: DEMO broker orders only after the terminal itself reports a "
-                "DEMO account (REAL/unknown/LIVE fail closed), minimum lot, start paused, never promotion "
-                "evidence.",
+        if cfg.mode.value == "demo" and not cfg.live_trading:
+            finding_id = "demo_fast_track_broker_stage" if cfg.demo_fast_track else "demo_broker_stage"
+            detail = (
+                "DEMO_FAST_TRACK is enabled: broker orders remain DEMO-only and the terminal itself must "
+                "report a DEMO account; the fast track never creates promotion evidence."
+                if cfg.demo_fast_track
+                else "PAPER_TRADING=false is accepted for DEMO only. The terminal must report DEMO and "
+                "existing stage-evidence gates remain enabled."
             )
+            report.add(finding_id, "warning", detail)
         else:
             report.add(
                 "paper_trading_disabled_in_file",
                 "blocked",
-                "PAPER_TRADING must remain true for this stage. Preflight observes configuration and never "
-                "rewrites it, credentials or control state.",
+                "PAPER_TRADING must remain true outside the explicit DEMO broker stage. Preflight observes "
+                "configuration and never rewrites credentials or control state.",
             )
 
-    values = {}
-    if env_name is not None:
-        try:
-            values = {
-                key.upper(): value
-                for key, value in dotenv_values(
-                    read_bytes(checked_path(root / env_name, root=root), root=root, limit=ENV_MAX_BYTES)
-                ).items()
-            }
-        except InspectionError:
-            values = {}
     findings, observations = inspect_env_keys(root, env_name=env_name)
     report.findings.extend(findings)
     report.observations["environment_keys"] = observations
-    findings, observations = inspect_telegram_format(values)
-    report.findings.extend(findings)
-    report.observations["telegram_format"] = observations
-    extras["telegram_api_calls"] = observations["telegram_api_calls"]
-
     findings, observations = inspect_terminal(cfg.mt5_terminal_path if cfg else None, windows=windows)
     report.findings.extend(findings)
     report.observations["terminal"] = observations
@@ -191,7 +174,7 @@ def deployment_preflight(
                 "ai_provider_not_probed",
                 "not_checked",
                 "No provider request was sent. Pass --check-ai-provider for ONE bounded read-only "
-                "listing GET; it is never a completion, broker, Telegram or news request.",
+                "listing GET; it is never a completion, broker, reporting or news request.",
             )
         findings, observations = inspect_clock(cfg, http_date=http_date)
         report.findings.extend(findings)
@@ -228,7 +211,8 @@ def deployment_preflight(
         "preflight_is_not_deployment_authorization",
         "not_checked",
         "Preflight never installs, registers a task, starts the terminal, connects a broker, resumes "
-        "control state, qualifies a stage or authorizes trading. Windows session/ACL, feed, owner and "
-        "soak validation remain operator obligations.",
+        "control state, qualifies a stage or authorizes trading. Windows session/ACL, MT5 account/source "
+        "identity, broker/feed contracts, news/provider entitlements, local-operator workflow and soak "
+        "validation remain external obligations.",
     )
     return _document(report, integrity, extras)

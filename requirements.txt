@@ -1,14 +1,12 @@
-# Direct dependencies pinned to an available, Python 3.11-compatible baseline.
-# Part 9 reuses FastAPI/uvicorn/aiogram/httpx; vanilla UI needs no npm/CDN build.
+# CPython 3.11+ baseline. As of 2026-10-06, pandas/NumPy/scikit-learn/LightGBM/MetaTrader5 pins
+# publish Windows x64 artifacts for CPython 3.14; ta==0.11.0 is source-only.
+# Telegram is optional outbound-only sendMessage reporting; no bot/API server is installed.
 # Generate and audit a platform-specific transitive lock after validation;
 # do not reuse a Linux lock for the Windows MT5 deployment.
 pydantic==2.13.5
 pydantic-settings==2.15.0
 python-dotenv==1.2.4
 SQLAlchemy==2.1.2
-fastapi==0.142.2
-uvicorn==0.54.0
-aiogram==3.31.0
 APScheduler==3.11.3
 httpx==0.28.1
 pandas==3.0.6

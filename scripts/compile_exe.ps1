@@ -13,8 +13,7 @@ try {
     & $python -m PyInstaller --noconfirm --clean --onedir --console --name ReflexBot `
         --distpath (Join-Path $root 'package') --workpath (Join-Path $root 'build\pyinstaller') `
         --specpath (Join-Path $root 'build') --collect-all lightgbm --collect-all sklearn `
-        --collect-all aiogram --collect-all apscheduler --collect-all tzdata --hidden-import MetaTrader5 `
-        --add-data ((Join-Path $root 'miniapp\static') + ';miniapp/static') (Join-Path $root 'launcher.py')
+        --collect-all apscheduler --collect-all tzdata --hidden-import MetaTrader5 (Join-Path $root 'launcher.py')
     if ($LASTEXITCODE -ne 0) { throw 'Packaging failed; no deployment or runtime start was performed.' }
     $exe = Join-Path $root 'package\ReflexBot\ReflexBot.exe'
     Get-FileHash -LiteralPath $exe -Algorithm SHA256

@@ -140,7 +140,7 @@ def _manifest(document, name):
 
 
 def verify_release(
-    root: Path, *, manifest_name="docs/RELEASE_15_MANIFEST.json", trusted_manifest_sha256=None
+    root: Path, *, manifest_name="docs/RELEASE_16_MANIFEST.json", trusted_manifest_sha256=None
 ):
     findings, digest, valid, release, verified, count, python_count = [], None, False, None, 0, 0, 0
     anchored = trusted_manifest_sha256 is not None

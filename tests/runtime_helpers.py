@@ -1,4 +1,4 @@
-"""TEST ONLY composition. All markets synthetic; no real SDK/provider/Telegram."""
+"""TEST ONLY composition. All markets synthetic; no real SDK/provider/network."""
 
 from uuid import uuid4
 
@@ -13,8 +13,6 @@ from trading.types import ManualClock
 
 async def runtime(tmp_path, **kwargs):
     values = dict(
-        runtime_api_enabled=False,
-        runtime_telegram_enabled=False,
         runtime_backup_enabled=False,
         ai_provider="disabled",
         ai_fallback_provider="disabled",

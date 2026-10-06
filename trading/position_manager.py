@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Mapping
 
+from core.local_operator import LocalOperator
 from trading.execution import ExecutionEngine
 from trading.risk_types import PositionReview
 from trading.types import BrokerError, TradingDisabled
@@ -102,14 +103,12 @@ class PositionManager:
                     )
             return {"reconciliation": summary, "managed_positions": len(owners), "outcomes": outcomes}
 
-    async def close(self, identifier: int, *, owner_id: int, idempotency_key: str | None = None):
-        # The caller must supply an authenticated principal from Part 9.
-        if (
-            self.engine.settings.telegram_owner_id is None
-            or type(owner_id) is not int
-            or owner_id != self.engine.settings.telegram_owner_id
-        ):
-            raise TradingDisabled("only the authenticated configured owner may request a position close")
+    async def close(self, identifier: int, *, operator: LocalOperator, idempotency_key: str | None = None):
+        # The current local OS user is required; no network principal is accepted.
+        if not isinstance(operator, LocalOperator):
+            raise TradingDisabled("current local operator required")
+        operator.require_current()
+        operator_id = operator.operator_id
         await self.engine.reconcile()
         owners = await asyncio.to_thread(self.engine.logger.owned, self.engine.account_key)
         owned = next((item for item in owners if item.identifier == identifier), None)
@@ -117,8 +116,8 @@ class PositionManager:
             raise TradingDisabled("requested position is not durably owned")
         await asyncio.to_thread(
             self.engine.database.audit,
-            "owner.close_requested",
-            "owner",
-            {"identifier": identifier, "owner_id": owner_id},
+            "local_operator.close_requested",
+            "local_operator",
+            {"identifier": identifier, "operator_id": operator_id},
         )
         return await self.engine.close_owned(owned.ticket, identifier, idempotency_key=idempotency_key)

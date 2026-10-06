@@ -239,7 +239,7 @@ class LearningEngine:
         )
 
     async def train(self, dataset: LearningDataset) -> TrainingResult:
-        # CPU work off the owner/Telegram event loop. Cancelled jobs cannot select a model.
+        # CPU work off the runtime event loop. Cancelled jobs cannot select a model.
         return await asyncio.to_thread(
             ModelTrainer(self.settings, self.profile).train, dataset, as_of=self.clock.now()
         )

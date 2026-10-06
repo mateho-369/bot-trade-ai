@@ -47,7 +47,7 @@ def test_other_install_root_may_be_verified_but_not_use_wrong_loaded_settings(tm
     assert any(item["code"] == "inspector_source_root_mismatch" for item in report["findings"])
 
 
-def test_development_pass_is_not_stage_owner_live_or_native_approval(source, monkeypatch):
+def test_development_pass_is_not_stage_operator_live_or_native_approval(source, monkeypatch):
     root, _, anchor = source
 
     def never(*args, **kwargs):
@@ -60,7 +60,7 @@ def test_development_pass_is_not_stage_owner_live_or_native_approval(source, mon
     assert report["overall"] == "offline_checks_passed" and inventory(root) == before
     for key in [
         "stage_evidence",
-        "owner_authenticated",
+        "local_operator_authenticated",
         "trading_authorized",
         "native_validation_complete",
         "automatic_resume",
@@ -71,7 +71,7 @@ def test_development_pass_is_not_stage_owner_live_or_native_approval(source, mon
     for key in [
         "actual_native_broker_calls",
         "actual_provider_network_calls",
-        "actual_telegram_network_calls",
+        "actual_outbound_report_network_calls",
         "actual_child_processes_spawned",
         "real_orders",
         "application_state_writes",

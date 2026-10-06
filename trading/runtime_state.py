@@ -1,22 +1,88 @@
-"""Persistent single-runtime lease and owner controls; transport auth lives in Part 9.
-
-owner_id MUST come from verified Telegram/initData identity, never request JSON.
-Synthetic diagnostics explicitly configure a test owner; no default owner exists.
-"""
+"""Persistent single-runtime lease and shared fail-closed local/automatic controls."""
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from uuid import uuid4
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from core.database import Database
-from core.models import BotState, OrderIntent, RiskEvent, RiskState
+from core.local_operator import LocalOperator
+from core.models import AuditLog, BotState, OrderIntent, RiskEvent, RiskState
 from core.settings import Settings
 from trading.types import Clock, TradingDisabled
 
 TERMINAL_INTENT_STATES = {"reconciled", "rejected", "canceled"}
+
+
+def _fresh_risk(risk: RiskState | None, settings: Settings, clock: Clock) -> bool:
+    if risk is None:
+        return False
+    try:
+        observed = datetime.fromisoformat(risk.metadata_json["last_observed_at"])
+        return 0 <= (clock.now() - observed).total_seconds() <= settings.risk_observation_max_age_seconds
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
+def _autonomous_account_verified(risk: RiskState, settings: Settings) -> bool:
+    metadata = risk.metadata_json
+    kind, source = metadata.get("account_kind"), metadata.get("account_source")
+    if settings.mt5_backend == "real":
+        # Real terminal initialization verifies DEMO mode even when a paper ledger wraps it.
+        return (kind == "demo" and source in {"mt5", "test_sdk"}) or (
+            kind == "simulated" and source == "paper" and settings.paper_trading
+        )
+    return kind == "simulated" and source in {"synthetic", "test_sdk"}
+
+
+def evaluate_resume_gates(session, settings: Settings, clock: Clock, *, account_key: str, state: BotState):
+    """Shared fail-closed resume contract for local resume and autonomous recovery."""
+    risk = session.scalar(
+        select(RiskState).where(
+            RiskState.account_key == account_key,
+            RiskState.mode == settings.mode.value,
+        )
+    )
+    unsettled = session.scalar(
+        select(OrderIntent.id)
+        .where(
+            OrderIntent.account_key == account_key,
+            OrderIntent.mode == settings.mode.value,
+            OrderIntent.state.not_in(TERMINAL_INTENT_STATES),
+        )
+        .limit(1)
+    )
+    reasons = []
+    if state.kill_switch_active:
+        reasons.append("kill_switch")
+    if state.last_error:
+        reasons.append("designated_halt")
+    if risk is None:
+        reasons.append("risk_baseline_missing")
+    else:
+        metadata = risk.metadata_json
+        if not metadata.get("baseline_verified"):
+            reasons.append("baseline_unverified")
+        if not _fresh_risk(risk, settings, clock):
+            reasons.append("risk_observation_stale")
+        if (
+            metadata.get("observation_gap")
+            or metadata.get("unclassified_cash_flow")
+            or metadata.get("unexplained_balance_change")
+            or not metadata.get("balance_continuity_verified")
+        ):
+            reasons.append("risk_continuity_unverified")
+        if risk.daily_loss_latched:
+            reasons.append("daily_loss_latched")
+        if risk.drawdown_latched:
+            reasons.append("drawdown_latched")
+        if settings.autonomous_demo and not _autonomous_account_verified(risk, settings):
+            reasons.append("demo_account_unverified")
+    if unsettled:
+        reasons.append("unsettled_intent")
+    return tuple(reasons)
 
 
 class RuntimeControl:
@@ -79,7 +145,7 @@ class RuntimeControl:
         self.session_id = None
 
     def pause_for_shutdown(self) -> None:
-        """Trusted runtime downward-only seam; no owner/reset/resume authority."""
+        """Trusted runtime downward-only seam; no local-operator/reset/resume authority."""
         with self.database.locked_session() as session:
             state = session.get(BotState, 1)
             if state is None or self.session_id is None or state.session_id != self.session_id:
@@ -89,29 +155,17 @@ class RuntimeControl:
             state.revision += 1
             self.database.add_audit(session, "runtime.shutdown_requested", "runtime", {})
 
-    def _owner(self, owner_id: int) -> None:
-        if (
-            self.settings.telegram_owner_id is None
-            or type(owner_id) is not int
-            or owner_id != self.settings.telegram_owner_id
-        ):
-            raise TradingDisabled("authenticated configured owner required")
+    @staticmethod
+    def _local_operator(operator: LocalOperator) -> None:
+        if not isinstance(operator, LocalOperator):
+            raise TradingDisabled("local operator required")
+        operator.require_current()
 
     def _fresh_risk(self, risk: RiskState | None) -> bool:
-        try:
-            return (
-                risk is not None
-                and 0
-                <= (
-                    self.clock.now() - datetime.fromisoformat(risk.metadata_json["last_observed_at"])
-                ).total_seconds()
-                <= self.settings.risk_observation_max_age_seconds
-            )
-        except (KeyError, TypeError, ValueError):
-            return False
+        return _fresh_risk(risk, self.settings, self.clock)
 
-    def pause(self, owner_id: int) -> None:
-        self._owner(owner_id)
+    def pause(self, operator: LocalOperator) -> None:
+        self._local_operator(operator)
         with self.database.locked_session() as session:
             state = session.get(BotState, 1)
             if state is None:
@@ -119,10 +173,12 @@ class RuntimeControl:
             if not state.kill_switch_active:
                 state.desired_state = "paused"
             state.revision += 1
-            self.database.add_audit(session, "owner.paused", "owner", {"owner_id": owner_id})
+            self.database.add_audit(
+                session, "runtime.local_paused", "local_operator", {"process_id": operator.process_id}
+            )
 
-    def kill(self, owner_id: int) -> None:
-        self._owner(owner_id)
+    def kill(self, operator: LocalOperator) -> None:
+        self._local_operator(operator)
         with self.database.locked_session() as session:
             state = session.get(BotState, 1)
             if state is None:
@@ -131,13 +187,19 @@ class RuntimeControl:
             state.revision += 1
             self.database.add_audit(
                 session,
-                "owner.killed",
-                "owner",
-                {"owner_id": owner_id, "protective_management_remains_enabled": True},
+                "runtime.local_killed",
+                "local_operator",
+                {"process_id": operator.process_id, "protective_management_remains_enabled": True},
             )
 
-    def resume(self, owner_id: int, *, account_key: str, expected_revision: int | None = None) -> None:
-        self._owner(owner_id)
+    def resume(
+        self,
+        operator: LocalOperator,
+        *,
+        account_key: str,
+        expected_revision: int | None = None,
+    ) -> None:
+        self._local_operator(operator)
         if expected_revision is not None and (type(expected_revision) is not int or expected_revision < 0):
             raise TradingDisabled("actual nonnegative expected control revision required")
         with self.database.locked_session() as session:
@@ -147,44 +209,125 @@ class RuntimeControl:
             # A later pause/kill/heartbeat cannot be undone by an older confirmation.
             if expected_revision is not None and state.revision != expected_revision:
                 raise TradingDisabled("control changed after confirmation; prepare a fresh resume")
-            risk = session.scalar(
-                select(RiskState).where(
-                    RiskState.account_key == account_key, RiskState.mode == self.settings.mode.value
-                )
+            if state.desired_state != "paused":
+                raise TradingDisabled("only a paused runtime can be resumed")
+            reasons = evaluate_resume_gates(
+                session, self.settings, self.clock, account_key=account_key, state=state
             )
-            unsettled = session.scalars(
-                select(OrderIntent).where(
-                    OrderIntent.account_key == account_key,
-                    OrderIntent.mode == self.settings.mode.value,
-                    OrderIntent.state.not_in(TERMINAL_INTENT_STATES),
-                )
-            ).all()
-            # Unsent staged intents must also be canceled/expired explicitly before resume.
-            if (
-                state.kill_switch_active
-                or state.last_error
-                or risk is None
-                or not risk.metadata_json.get("baseline_verified")
-                or not self._fresh_risk(risk)
-                or risk.metadata_json.get("observation_gap")
-                or risk.metadata_json.get("unclassified_cash_flow")
-                or risk.metadata_json.get("unexplained_balance_change")
-                or not risk.metadata_json.get("balance_continuity_verified")
-                or risk.drawdown_latched
-                or risk.daily_loss_latched
-                or unsettled
-            ):
-                raise TradingDisabled("kill/loss/recovery/baseline/unsettled-intent gate prevents resume")
+            if reasons:
+                raise TradingDisabled("resume gates block entry: " + ", ".join(reasons))
             state.desired_state = "running"
             state.revision += 1
             self.database.add_audit(
-                session, "owner.resumed_entries", "owner", {"owner_id": owner_id, "account": account_key}
+                session,
+                "runtime.local_resumed",
+                "local_operator",
+                {"process_id": operator.process_id, "account": account_key},
             )
 
+    def auto_resume(
+        self,
+        *,
+        account_key: str,
+        components_ready: bool,
+        ai_healthy: bool,
+        trigger: str,
+    ) -> bool:
+        """Run the same gates for startup/retry and recoverable CRITICAL auto-pauses."""
+        if not self.settings.autonomous_demo or not components_ready or not ai_healthy:
+            return False
+        if trigger not in {"startup", "news_ready", "signals_ready", "ai_ready", "retry"}:
+            raise ValueError("unknown autonomous resume trigger")
+        with self.database.locked_session() as session:
+            state = session.get(BotState, 1)
+            self.check(state)
+            if state.desired_state != "paused":
+                return False
+            if evaluate_resume_gates(
+                session, self.settings, self.clock, account_key=account_key, state=state
+            ):
+                return False
+
+            local_pause_actions = (
+                "runtime.local_paused",
+                "runtime.local_killed",
+                "runtime.local_kill_reset_paused",
+                "runtime.local_recovery_reviewed",
+                "runtime.local_sampled_baseline_reviewed",
+            )
+            latest_local_pause = (
+                session.scalar(select(func.max(AuditLog.id)).where(AuditLog.action.in_(local_pause_actions)))
+                or 0
+            )
+            latest_local_resume = (
+                session.scalar(
+                    select(func.max(AuditLog.id)).where(AuditLog.action == "runtime.local_resumed")
+                )
+                or 0
+            )
+            # Aggregate across the complete audit history: unrelated/high-volume events cannot hide
+            # a newer local pause or a reviewed action that intentionally leaves entries paused.
+            if latest_local_pause > latest_local_resume:
+                return False
+
+            now = self.clock.now()
+            critical_pause = session.scalar(
+                select(AuditLog)
+                .where(
+                    AuditLog.action == "runtime.auto_paused",
+                    AuditLog.details["reason"].as_string() == "critical_alert",
+                    AuditLog.details["account"].as_string() == account_key,
+                )
+                .order_by(AuditLog.id.desc())
+                .limit(1)
+            )
+            last_auto_resume = session.scalar(
+                select(AuditLog)
+                .where(
+                    AuditLog.action == "runtime.auto_resumed",
+                    AuditLog.details["account"].as_string() == account_key,
+                )
+                .order_by(AuditLog.id.desc())
+                .limit(1)
+            )
+            recovering_critical = critical_pause is not None and (
+                last_auto_resume is None or critical_pause.id > last_auto_resume.id
+            )
+            if recovering_critical and (now - critical_pause.time).total_seconds() < 15 * 60:
+                return False
+
+            day_start = now.astimezone(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+            resumes_today = session.scalars(
+                select(AuditLog).where(
+                    AuditLog.action == "runtime.auto_resumed",
+                    AuditLog.time >= day_start,
+                    AuditLog.details["account"].as_string() == account_key,
+                )
+            ).all()
+            if len(resumes_today) >= self.settings.auto_resume_max_per_day:
+                return False
+
+            state.desired_state = "running"
+            state.revision += 1
+            audit = self.database.add_audit(
+                session,
+                "runtime.auto_resumed",
+                "runtime",
+                {
+                    "session_id": self.session_id,
+                    "account": account_key,
+                    "trigger": trigger,
+                    "reason": "critical_alert_recovery" if recovering_critical else "startup_or_retry",
+                    "protective_management_remains_enabled": True,
+                },
+            )
+            audit.time = now
+            return True
+
     def acknowledge_recovery(
-        self, owner_id: int, *, account_key: str, broker_writes_quarantined: bool
+        self, operator: LocalOperator, *, account_key: str, broker_writes_quarantined: bool
     ) -> None:
-        self._owner(owner_id)
+        self._local_operator(operator)
         if broker_writes_quarantined:
             raise TradingDisabled("fresh reconciled broker runtime required; reconnect is insufficient")
         with self.database.locked_session() as session:
@@ -204,13 +347,14 @@ class RuntimeControl:
             state.last_error, state.desired_state = None, "paused"
             state.revision += 1
             self.database.add_audit(
-                session, "owner.recovery_reviewed", "owner", {"owner_id": owner_id, "account": account_key}
+                session,
+                "runtime.local_recovery_reviewed",
+                "local_operator",
+                {"process_id": operator.process_id, "account": account_key},
             )
 
     def auto_pause(self, reason: str, *, account_key: str = "unbound") -> bool:
-        """Pause NEW entries after a CRITICAL alert (Alert Center). Not a halt: it never sets
-        ``last_error``, never clears kill/loss latches and never touches positions; the owner
-        resumes with the normal fully-gated /resume. Returns True when the state changed."""
+        """Pause new entries after a CRITICAL alert without changing latches or positions."""
         if reason not in {"critical_alert"}:
             raise ValueError("unknown auto-pause reason identifier")
         with self.database.locked_session() as session:
@@ -221,9 +365,13 @@ class RuntimeControl:
                 return False
             state.desired_state = "paused"
             state.revision += 1
-            self.database.add_audit(
-                session, "runtime.auto_paused", "runtime", {"reason": reason, "account": account_key}
+            audit = self.database.add_audit(
+                session,
+                "runtime.auto_paused",
+                "runtime",
+                {"reason": reason, "account": account_key, "session_id": self.session_id},
             )
+            audit.time = self.clock.now()
             return True
 
     def halt(self, reason: str, *, account_key: str = "unbound") -> None:
@@ -257,12 +405,12 @@ class RuntimeControl:
                 session, "runtime.halted", "runtime", {"reason": reason, "account": account_key}
             )
 
-    def review_flat_baseline(self, owner_id: int, *, account_key: str, confirm: str) -> None:
+    def review_flat_baseline(self, operator: LocalOperator, *, account_key: str, confirm: str) -> None:
         """Explicit review of legacy/missed observations, ONLY with a flat proven ledger.
 
         Cannot reset a daily/drawdown latch or silently reconstruct unknown peaks.
         """
-        self._owner(owner_id)
+        self._local_operator(operator)
         if confirm != "REVIEW_SAMPLED_BASELINE":
             raise TradingDisabled("explicit sampled-baseline acknowledgement required")
         with self.database.locked_session() as session:
@@ -323,15 +471,15 @@ class RuntimeControl:
             risk.metadata_json = meta
             self.database.add_audit(
                 session,
-                "owner.sampled_baseline_reviewed",
-                "owner",
-                {"owner_id": owner_id, "account": account_key, "latches_reset": False},
+                "runtime.local_sampled_baseline_reviewed",
+                "local_operator",
+                {"process_id": operator.process_id, "account": account_key, "latches_reset": False},
             )
 
     def reset_kill(
-        self, owner_id: int, *, account_key: str, confirm: str, broker_writes_quarantined: bool
+        self, operator: LocalOperator, *, account_key: str, confirm: str, broker_writes_quarantined: bool
     ) -> None:
-        self._owner(owner_id)
+        self._local_operator(operator)
         if confirm != "RESET_KILL_AND_KEEP_PAUSED" or broker_writes_quarantined:
             raise TradingDisabled("explicit fresh-runtime kill-reset review required")
         with self.database.locked_session() as session:
@@ -368,7 +516,10 @@ class RuntimeControl:
             state.kill_switch_active, state.desired_state = False, "paused"
             state.revision += 1
             self.database.add_audit(
-                session, "owner.kill_reset_paused", "owner", {"owner_id": owner_id, "account": account_key}
+                session,
+                "runtime.local_kill_reset_paused",
+                "local_operator",
+                {"process_id": operator.process_id, "account": account_key},
             )
 
     def cancel_expired_unsent(self) -> int:
@@ -388,3 +539,7 @@ class RuntimeControl:
             if count:
                 self.database.add_audit(session, "intent.unsent_expired", "runtime", {"count": count})
         return count
+
+
+# Shared state implementation retained under the historical execution-facing name.
+RuntimeState = RuntimeControl

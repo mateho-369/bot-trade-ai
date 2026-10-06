@@ -16,6 +16,7 @@ from pathlib import Path
 from sqlalchemy import select
 
 from core.database import Database
+from core.local_operator import LocalOperator
 from core.models import OrderIntent, RiskState, Signal, Trade
 from core.security import sha256_json
 from core.settings import Settings
@@ -61,8 +62,6 @@ async def run() -> dict:
             _env_file=None,
             project_root=Path(directory),
             symbols=("EURUSD", "GBPUSD"),
-            telegram_owner_id=1,
-            telegram_bot_token="123456789:TEST_ONLY_NEVER_USED",
             atr_trailing_enabled=False,
         )
         database = Database(cfg)
@@ -95,7 +94,7 @@ async def run() -> dict:
             ready = await signals.evaluate("GBPUSD", reviewer=SyntheticReviewer(signals), news=news)
             assert ready.approved and execution.database.status()["state"] == "paused"
             assert await broker.get_positions() == ()
-            execution.control.resume(1, account_key=execution.account_key)
+            execution.control.resume(LocalOperator.current(), account_key=execution.account_key)
             filled = await execution.execute_signal(ready.signal_id)
             assert filled.status == ResultStatus.FILLED
             assert await execution.execute_signal(ready.signal_id) == filled

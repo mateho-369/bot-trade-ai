@@ -169,7 +169,7 @@ def inspect_sqlite(path, *, root):
                     "sqlite_snapshot_kill_latch_preserved",
                     "warning",
                     "Stored kill switch is latched and remains unchanged. A diagnostic never clears "
-                    "loss/recovery/owner controls.",
+                    "loss/recovery/operator controls.",
                 )
             )
     except InspectionError as exc:

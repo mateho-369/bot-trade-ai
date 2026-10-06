@@ -1,4 +1,7 @@
-"""Read-only bounded research-bundle consistency audit; no Settings load, writes, broker or owner controls."""
+"""Read-only bounded research-bundle consistency audit.
+
+No Settings load, writes, broker or operator controls.
+"""
 
 from __future__ import annotations
 

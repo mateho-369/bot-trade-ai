@@ -20,7 +20,7 @@ def test_runtime_safest_defaults(tmp_path):
     s = cfg(tmp_path)
     assert s.demo_mode and s.paper_trading and not s.live_trading
     assert s.mt5_backend == "mock" and s.watchdog_interval_seconds == 30
-    assert not s.runtime_learning_enabled and not s.runtime_register_menu
+    assert not s.runtime_learning_enabled and not s.autonomous_demo
     assert s.heartbeat_interval_seconds * 3 <= s.runtime_lease_seconds
     assert s.runtime_shutdown_seconds >= s.mt5_api_timeout_seconds
 

@@ -30,6 +30,9 @@ class RuntimeHealth:
         self.created = psutil.Process(self.pid).create_time()
         self.started = monotonic()
         self.state = "starting"
+        self.reconciled = False
+        self.components_ready = False
+        self.ai_healthy = False
         self.jobs = {}
         self._lock = RLock()
         self.resources = None
@@ -79,6 +82,9 @@ class RuntimeHealth:
             "managed_id": self.identity,
             "updated_at": datetime.now(timezone.utc).isoformat(),
             "status": status,
+            "reconciled": self.reconciled,
+            "components_ready": self.components_ready,
+            "ai_healthy": self.ai_healthy,
             "control": control,
             "session_id": session,
             "config_hash": self.settings.safety_fingerprint(),

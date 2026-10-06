@@ -1,9 +1,10 @@
-"""TEST ONLY synthetic contexts/owner. Never promotion evidence or real auth."""
+"""TEST ONLY synthetic contexts. Never promotion evidence or native account proof."""
 
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 from core.database import Database
+from core.local_operator import LocalOperator
 from core.settings import Settings
 from trading.execution import ExecutionEngine
 from trading.mock_mt5 import MockMT5Client
@@ -12,7 +13,9 @@ from trading.types import ManualClock, Side, SourceKind
 
 D = Decimal
 MOMENT = datetime(2026, 10, 3, 12, tzinfo=timezone.utc)
-OWNER = 42
+OWNER = LocalOperator.current()
+BAD_OPERATOR = LocalOperator(OWNER.username, OWNER.process_id + 1)
+OPERATOR_ID = OWNER.operator_id
 
 
 def config(tmp_path, **kwargs):
@@ -20,8 +23,6 @@ def config(tmp_path, **kwargs):
         _env_file=None,
         project_root=tmp_path,
         symbols=("EURUSD",),
-        telegram_owner_id=OWNER,
-        telegram_bot_token="123456789:TEST_ONLY_NEVER_CONTACT_TELEGRAM",
         max_slippage_points=2,
         atr_trailing_enabled=False,
     )
