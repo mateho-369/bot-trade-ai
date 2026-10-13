@@ -6,7 +6,7 @@ from sqlalchemy import select
 
 from core.database import Database
 from core.models import BotState, RiskState
-from tests.risk_helpers import MOMENT, OWNER, config, make_engine, open_one
+from tests.risk_helpers import BAD_OPERATOR, MOMENT, OWNER, config, make_engine, open_one
 from trading.runtime_state import RuntimeControl
 from trading.types import ManualClock, TradingDisabled
 
@@ -19,27 +19,27 @@ async def engine(tmp_path):
     result.database.close()
 
 
-def test_new_runtime_is_paused_not_an_owner_approval(engine):
+def test_new_runtime_is_paused_not_a_local_operator_approval(engine):
     assert engine.database.status()["state"] == "paused"
     assert engine.control.session_id is not None
 
 
-@pytest.mark.parametrize("owner", [None, 0, 43, True, 42.0, "42"])
-def test_owner_id_requires_authenticated_integer(engine, owner):
+@pytest.mark.parametrize("operator", [None, 0, 43, True, 42.0, "42", BAD_OPERATOR])
+def test_resume_requires_current_local_operator(engine, operator):
     with pytest.raises(TradingDisabled):
-        engine.control.resume(owner, account_key=engine.account_key)
+        engine.control.resume(operator, account_key=engine.account_key)
     assert engine.database.status()["state"] == "paused"
 
 
-def test_missing_owner_is_deny_all(tmp_path):
-    cfg = config(tmp_path, telegram_owner_id=None, telegram_bot_token="")
+def test_noncurrent_local_operator_is_deny_all(tmp_path):
+    cfg = config(tmp_path)
     db = Database(cfg)
     db.initialize()
     control = RuntimeControl(db, cfg, ManualClock(MOMENT))
     try:
         control.claim()
         with pytest.raises(TradingDisabled):
-            control.pause(OWNER)
+            control.pause(BAD_OPERATOR)
     finally:
         control.release()
         db.close()

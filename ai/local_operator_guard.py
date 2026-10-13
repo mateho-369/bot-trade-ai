@@ -1,20 +1,19 @@
-"""Internal owner composition guard, not Telegram/initData authentication."""
+"""Local-operator checks for offline approval/projection helpers."""
 
 from sqlalchemy import select
 
+from core.local_operator import LocalOperator
 from core.models import BotState, OrderIntent, RiskState, Trade
-from core.settings import Settings
 from trading.runtime_state import TERMINAL_INTENT_STATES
 from trading.types import TradingDisabled
 
 
-def require_owner(settings: Settings, owner_id: int):
-    if (
-        type(owner_id) is not int
-        or settings.telegram_owner_id is None
-        or owner_id != settings.telegram_owner_id
-    ):
-        raise TradingDisabled("authenticated configured owner required")
+def require_local_operator(operator: LocalOperator) -> int:
+    """Return a stable, non-secret audit tag for the current local OS operator."""
+    if not isinstance(operator, LocalOperator):
+        raise TradingDisabled("current local operator required")
+    operator.require_current()
+    return operator.operator_id
 
 
 def require_stopped_flat(session):

@@ -32,9 +32,6 @@ IMPORTABLE = {
     "pydantic-settings": "pydantic_settings",
     "python-dotenv": "dotenv",
     "SQLAlchemy": "sqlalchemy",
-    "fastapi": "fastapi",
-    "uvicorn": "uvicorn",
-    "aiogram": "aiogram",
     "APScheduler": "apscheduler",
     "httpx": "httpx",
     "pandas": "pandas",
@@ -71,14 +68,15 @@ REQUIRED_KEYS = (
     "DATA_DIR",
     "LOG_FILE",
     "BACKUP_DIR",
-    "TELEGRAM_BOT_TOKEN",
-    "TELEGRAM_OWNER_ID",
+    "AUTONOMOUS_DEMO",
 )
 # Blank is a legitimate deliberate configuration, never an automatic failure.
 BLANK_ALLOWED_KEYS = (
     "MT5_LOGIN",
     "MT5_PASSWORD",
     "MT5_SERVER",
+    "TELEGRAM_BOT_TOKEN",
+    "TELEGRAM_REPORT_CHAT_ID",
     "OPENAI_API_KEY",
     "NEWS_API_KEY",
     "FINNHUB_API_KEY",
@@ -88,8 +86,6 @@ SECRET_PATTERN = re.compile(
     r"password|passwd|token|api[_-]?key|secret|authorization|cookie|init[_-]?data|private[_-]?key",
     re.IGNORECASE,
 )
-BOT_TOKEN = re.compile(r"^[0-9]{5,15}:[A-Za-z0-9_-]{30,64}$")
-OWNER_ID = re.compile(r"^[1-9][0-9]{4,19}$")
 DISK_FLOOR_BYTES = 512 * 1024 * 1024
 PROBE_LIMIT_BYTES = 65536
 CLOCK_SAMPLE_SECONDS = 0.2
@@ -291,6 +287,19 @@ def demo_fast_track_file(upper: dict) -> bool:
     )
 
 
+def autonomous_demo_file(upper: dict) -> bool:
+    def flag(name):
+        return str(upper.get(name, "")).strip().lower()
+
+    return (
+        flag("AUTONOMOUS_DEMO") == "true"
+        and flag("DEMO_MODE") == "true"
+        and flag("PAPER_TRADING") == "false"
+        and flag("LIVE_TRADING") == "false"
+        and flag("START_PAUSED") == "true"
+    )
+
+
 def inspect_env_keys(root, *, env_name):
     """Presence/emptiness of required keys with masked values; safe defaults must stay unchanged."""
     findings, observations = [], {"source": env_name or "immutable_defaults_only"}
@@ -304,7 +313,7 @@ def inspect_env_keys(root, *, env_name):
             )
         )
         return tuple(findings), observations
-    if env_name not in {".env", ".env.example"}:
+    if env_name not in {".env", ".env.example", ".env.demo.example"}:
         raise InspectionError("environment_must_be_source_root_file")
     try:
         values = dotenv_values(read_bytes(root / env_name, root=root, limit=ENV_MAX_BYTES))
@@ -324,7 +333,7 @@ def inspect_env_keys(root, *, env_name):
     blank_allowed = {key: masked(str(upper[key]).strip()) for key in BLANK_ALLOWED_KEYS if key in upper}
     # Name-based sensitivity only; values are never printed, hashed or partially echoed.
     secrets_present = sorted(key for key in upper if secret_key(key) and str(upper[key]).strip())
-    template = env_name == ".env.example"
+    template = env_name in {".env.example", ".env.demo.example"}
     observations.update(
         {
             "keys_observed": len(upper),
@@ -355,20 +364,35 @@ def inspect_env_keys(root, *, env_name):
                 "All required deployment keys are present and non-empty; values were masked.",
             )
         )
+    expected_autonomous = (
+        "true"
+        if env_name == ".env.demo.example" or env_name == ".env" and autonomous_demo_file(upper)
+        else "false"
+    )
     for key, expected in (
         ("LIVE_TRADING", "false"),
         ("PAPER_TRADING", "true"),
         ("START_PAUSED", "true"),
         ("DEMO_MODE", "true"),
+        ("AUTONOMOUS_DEMO", expected_autonomous),
     ):
         observed = str(upper.get(key, "")).strip().lower()
-        if key == "PAPER_TRADING" and observed == "false" and demo_fast_track_file(upper):
+        if (
+            key == "PAPER_TRADING"
+            and observed == "false"
+            and (
+                demo_fast_track_file(upper)
+                or autonomous_demo_file(upper)
+                and (env_name == ".env" or env_name == ".env.demo.example")
+            )
+        ):
             findings.append(
                 Finding(
-                    "demo_fast_track_broker_stage",
+                    "demo_broker_stage",
                     "warning",
-                    "PAPER_TRADING=false is accepted only for the owner-approved DEMO_FAST_TRACK stage "
-                    "(DEMO_MODE=true, LIVE_TRADING=false); the terminal must still report a DEMO account.",
+                    "PAPER_TRADING=false is accepted only for a paused, non-live DEMO stage. "
+                    "AUTONOMOUS_DEMO keeps the existing stage-evidence gates; "
+                    "the terminal must report DEMO.",
                 )
             )
             continue
@@ -381,76 +405,6 @@ def inspect_env_keys(root, *, env_name):
                     "never rewrites configuration, credentials or control state.",
                 )
             )
-    if not template and any(name in {"TELEGRAM_BOT_TOKEN", "TELEGRAM_OWNER_ID"} for name in missing + empty):
-        findings.append(
-            Finding(
-                "owner_controls_unconfigured",
-                "blocked",
-                "Owner controls are required for a private deployment; no Telegram API call was made and no "
-                "token was printed.",
-            )
-        )
-    return tuple(findings), observations
-
-
-def inspect_telegram_format(values):
-    """Format-only owner credential validation. No API call, no token echo, no owner authentication."""
-    token = str(values.get("TELEGRAM_BOT_TOKEN", "") or "").strip()
-    owner = str(values.get("TELEGRAM_OWNER_ID", "") or "").strip()
-    observations = {
-        "token_format_valid": bool(BOT_TOKEN.fullmatch(token)),
-        "owner_id_format_valid": bool(OWNER_ID.fullmatch(owner)),
-        "telegram_api_calls": 0,
-        "owner_authenticated": False,
-        "token_observed": masked(token),
-        "owner_id_observed": masked(owner),
-    }
-    if not token and not owner:
-        return (
-            Finding(
-                "telegram_credentials_absent",
-                "not_checked",
-                "No Telegram credentials are configured, so format validation was skipped. Owner "
-                "unavailable, which is the safe default for research/paper inspection.",
-            ),
-        ), observations
-    findings = []
-    if bool(token) != bool(owner):
-        findings.append(
-            Finding(
-                "telegram_pair_incomplete",
-                "blocked",
-                "Bot token and owner ID must be configured together; a token without an owner ID cannot "
-                "restrict commands, and an owner ID without a token cannot authenticate.",
-            )
-        )
-    if token and not observations["token_format_valid"]:
-        findings.append(
-            Finding(
-                "telegram_token_format_invalid",
-                "blocked",
-                "The bot token does not match the documented `<bot-id>:<secret>` shape. Format only was "
-                "checked; no API call was made and the value was never printed.",
-            )
-        )
-    if owner and not observations["owner_id_format_valid"]:
-        findings.append(
-            Finding(
-                "telegram_owner_id_format_invalid",
-                "blocked",
-                "The owner ID must be a positive decimal user ID. No API call was made and the value was "
-                "never printed.",
-            )
-        )
-    if not findings:
-        findings.append(
-            Finding(
-                "telegram_format_valid",
-                "passed",
-                "Bot token and owner ID have valid formats. This is NOT validity, ownership, entitlement or "
-                "an authenticated owner; no Telegram request was sent.",
-            )
-        )
     return tuple(findings), observations
 
 
@@ -469,7 +423,7 @@ def _listing_model_count(raw):
 
 
 def probe_ai_provider(cfg, *, timeout=None, transport=None):
-    """ONE bounded read-only provider GET. Never a broker/Telegram/news request or a completion."""
+    """ONE bounded read-only provider GET. Never a broker/reporting/news request or a completion."""
     import httpx
 
     provider = cfg.ai_provider
@@ -745,7 +699,7 @@ def inspect_clock(cfg, *, http_date=None, drift_warning_seconds=5.0):
                         "system_clock_drift_warning",
                         "warning",
                         "Local time differs from the provider's HTTP Date header beyond the tolerance. Order "
-                        "age, initData age, news freshness and trailing are time-sensitive. No clock "
+                        "age, news freshness and trailing are time-sensitive. No clock "
                         "or system setting was changed.",
                     )
                 )

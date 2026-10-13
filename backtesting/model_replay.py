@@ -18,9 +18,9 @@ from sqlalchemy import select
 
 from ai.dataset import LearningDataset
 from ai.json_validation import strict_json
+from ai.local_operator_guard import require_stopped_flat
 from ai.model_registry import ModelRegistry
 from ai.model_trainer import ModelTrainer, TrainingResult
-from ai.owner_guard import require_stopped_flat
 from ai.replay_binding import BINDING_FORMAT, validate_replay_binding
 from ai.walk_forward import purged_walk_forward
 from backtesting.contracts import ReplayModelSelection, utc_time

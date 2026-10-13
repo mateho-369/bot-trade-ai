@@ -93,7 +93,7 @@ def test_structural_native_ledger_export_positive_is_fixture_not_authentic_evide
     assert report["metrics"]["closed_trades"] == 100 and report["metrics"]["unexplained_gaps"] == 0
     assert Decimal(report["metrics"]["profit_factor"]) == 2
     assert report["metrics"]["net_profit_account"] == "50.00000000"
-    assert report["metrics"]["costs_included"] and report["owner_review_required"]
+    assert report["metrics"]["costs_included"] and report["local_operator_review_required"]
     with db.session() as session:
         assert session.scalar(select(DeploymentEvidence)) is None  # Export never approves/inserts.
     with pytest.raises(FileExistsError):

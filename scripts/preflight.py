@@ -23,7 +23,7 @@ def main(argv=None):
         description="Read-only deployment preflight observations; NEVER authorization to trade"
     )
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[1])
-    parser.add_argument("--manifest", default="docs/RELEASE_15_MANIFEST.json")
+    parser.add_argument("--manifest", default="docs/RELEASE_16_MANIFEST.json")
     parser.add_argument(
         "--trusted-manifest-sha256",
         help="Lowercase external trusted SHA of the release manifest; not a self-authenticating checksum",
@@ -31,7 +31,7 @@ def main(argv=None):
     parser.add_argument("--profile", choices=("development", "windows_native"), default="development")
     parser.add_argument(
         "--env-file",
-        choices=(".env", ".env.example"),
+        choices=(".env", ".env.example", ".env.demo.example"),
         help="Explicit file in the source root; absence means immutable defaults only",
     )
     parser.add_argument(

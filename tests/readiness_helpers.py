@@ -1,4 +1,4 @@
-"""Explicit miniature source/DB fixtures, NEVER authentic release/stage/native/owner evidence."""
+"""Explicit miniature source/DB fixtures, NEVER authentic release/stage/native/local-operator evidence."""
 
 import hashlib
 import json
@@ -36,7 +36,7 @@ def seal(root, *, changes=None):
     }
     if changes:
         changes(doc)
-    path = root / "docs/RELEASE_15_MANIFEST.json"
+    path = root / "docs/RELEASE_16_MANIFEST.json"
     path.parent.mkdir(exist_ok=True)
     path.write_text(json.dumps(doc, indent=2))
     return doc, digest(path.read_bytes())

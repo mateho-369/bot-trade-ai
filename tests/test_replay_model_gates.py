@@ -16,6 +16,7 @@ from core.models import BotState, DeploymentEvidence, ModelVersion, OrderIntent,
 from core.security import sha256_json
 from tests.backtest_helpers import finalized
 from tests.replay_model_helpers import model_runtime
+from tests.risk_helpers import OWNER
 from trading.risk_types import DecisionContext
 from trading.types import BrokerError, Tick, TradingDisabled
 
@@ -87,7 +88,7 @@ async def test_rehashing_gate_and_context_does_not_fabricate_inference(model_inp
             row.features_json = payload
         with pytest.raises(TradingDisabled):
             await signals.get(ready.signal_id)
-        engine.control.resume(engine.settings.telegram_owner_id, account_key=engine.account_key)
+        engine.control.resume(OWNER, account_key=engine.account_key)
         with pytest.raises(TradingDisabled):
             await engine.execute_signal(ready.signal_id)
         assert not await engine.broker.get_positions()
@@ -129,7 +130,7 @@ async def test_model_selection_artifact_and_context_rechecked_not_trusted_flags(
         if phase == "execute":
             ready = await signals.finalize(proposal.signal_id, review=review, news=window)
             assert ready.approved
-            engine.control.resume(engine.settings.telegram_owner_id, account_key=engine.account_key)
+            engine.control.resume(OWNER, account_key=engine.account_key)
         if fault == "file":
             artifact_path(engine.settings, model.digest).write_text("{}")
         elif fault == "marker":
@@ -186,13 +187,13 @@ async def test_ordinary_historical_registration_has_no_replay_selection_permissi
             row.metrics_json = metrics
             row.active = False
         registry = ModelRegistry(engine.database, engine.settings, engine.clock, engine.profile)
-        # Stop the private session. Raw owner ID is internal, NOT actual Telegram authentication.
-        engine.control.pause(engine.settings.telegram_owner_id)
+        # Stop the private session. The local operator audit tag is internal, not a remote identity.
+        engine.control.pause(OWNER)
         engine.control.release()
         with pytest.raises(TradingDisabled):
-            registry.activate(row.id, scope="backtest", owner_id=engine.settings.telegram_owner_id)
+            registry.activate(row.id, scope="backtest", operator=OWNER)
         with pytest.raises(TradingDisabled):
-            registry.activate(row.id, scope="paper", owner_id=engine.settings.telegram_owner_id)
+            registry.activate(row.id, scope="paper", operator=OWNER)
         assert registry.get(row.id).digest == model.digest
 
 
@@ -227,7 +228,7 @@ async def test_actual_probability_recomputed_at_pre_send_risk_not_only_signal_ge
             context = DecisionContext.from_dict(payload["decision_context"])
             payload["decision_digest"] = context.digest
             row.features_json = payload
-        engine.control.resume(engine.settings.telegram_owner_id, account_key=engine.account_key)
+        engine.control.resume(OWNER, account_key=engine.account_key)
         with pytest.raises(BrokerError):
             await engine.open(
                 "EURUSD",
@@ -243,8 +244,8 @@ async def test_actual_probability_recomputed_at_pre_send_risk_not_only_signal_ge
 async def test_good_ml_probability_does_not_bypass_kill_risk_stop(model_input, tmp_path):
     async with model_runtime(tmp_path, model_input) as (engine, signals, _, news, reviewer, _, _):
         ready = await finalized(signals, news, reviewer)
-        engine.control.resume(engine.settings.telegram_owner_id, account_key=engine.account_key)
-        engine.control.kill(engine.settings.telegram_owner_id)
+        engine.control.resume(OWNER, account_key=engine.account_key)
+        engine.control.kill(OWNER)
         with pytest.raises(BrokerError):
             await engine.execute_signal(ready.signal_id)
         assert not await engine.broker.get_positions()
@@ -263,11 +264,11 @@ async def test_model_failure_does_not_stop_protective_work_for_owned_position(mo
         model,
     ):
         ready = await finalized(signals, news, reviewer)
-        engine.control.resume(engine.settings.telegram_owner_id, account_key=engine.account_key)
+        engine.control.resume(OWNER, account_key=engine.account_key)
         await engine.execute_signal(ready.signal_id)
         position = (await engine.broker.get_positions())[0]
         artifact_path(engine.settings, model.digest).write_text("{}")
-        engine.control.kill(engine.settings.telegram_owner_id)
+        engine.control.kill(OWNER)
         market.clock.advance(timedelta(seconds=1))
         bid = position.tp - Decimal("0.0003")
         market._quotes["EURUSD"] = Tick("EURUSD", bid, bid + Decimal("0.00012"), market.clock.now())

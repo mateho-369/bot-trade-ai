@@ -1,7 +1,7 @@
 """Chronological offline runner using the production signal/risk/execution/position engines.
 
-No credentials, transports, SDK, Telegram, APScheduler, child process, production model activation,
-owner-production state or financial history are opened. Only a NEW isolated ledger is written.
+No credentials, transports, SDK, APScheduler, child process, production model activation,
+production state or financial history are opened. Only a NEW isolated ledger is written.
 """
 
 from __future__ import annotations
@@ -26,6 +26,7 @@ from backtesting.model_replay import VerifiedReplayModel
 from backtesting.news import ReplayNews
 from backtesting.reviews import ReplayReviewer
 from core.database import Database
+from core.local_operator import LocalOperator
 from core.models import Trade
 from core.settings import Settings
 from strategy.signal_engine import SignalEngine
@@ -68,13 +69,11 @@ def isolated_settings(base: Settings, dataset: HistoricalDataset, directory: Pat
         demo_mode=True,
         mt5_backend="mock",
         start_paused=True,
+        autonomous_demo=False,
         symbols=symbols,
         symbol_aliases={key: value for key, value in base.symbol_aliases.items() if key in symbols},
         mt5_login=None,
         mt5_server="",
-        telegram_owner_id=base.telegram_owner_id or 1,
-        telegram_bot_token=SecretStr("offline-replay-not-a-telegram-token"),
-        telegram_use_webhook=False,
     )
     # Rebase paths to a new root; never open the production data/model/calendar/checkpoint directories.
     for field in (
@@ -225,7 +224,7 @@ class Backtester:
                 "safety_config_hash": cfg.safety_fingerprint(),
                 "effective_public_config": {
                     **cfg.public_config(),
-                    "telegram_configured": False,
+                    "reporter_configured": False,
                     "offline_principal_only": True,
                 },
                 "input_manifest": next(iter(self.dataset.files)),
@@ -244,10 +243,7 @@ class Backtester:
                 },
                 "secrets_copied": False,
                 "replay_model": replay_model.summary() if replay_model else None,
-                "original_owner_configured": self.base.telegram_owner_id is not None,
-                "surrogate_owner_scope": "private offline ledger only"
-                if self.base.telegram_owner_id is None
-                else None,
+                "local_operator_scope": "private offline ledger only",
             },
         )
         database = Database(cfg)
@@ -270,7 +266,7 @@ class Backtester:
             await signals.initialize()
             if self.options.simulate_orders:
                 await asyncio.to_thread(
-                    engine.control.resume, cfg.telegram_owner_id, account_key=engine.account_key
+                    engine.control.resume, LocalOperator.current(), account_key=engine.account_key
                 )
             for when in sorted(scheduled):
                 clock.advance(when - clock.now())
@@ -460,7 +456,7 @@ class Backtester:
                 "promotion_eligible": False,
                 "promotion_blockers": [
                     "research_output_not_independent_provenance_attestation",
-                    "no_owner_reviewed_stage_artifact",
+                    "no_local_reviewed_stage_artifact",
                     "no_genuine_paper_or_demo_ledger",
                     *(
                         [
@@ -490,7 +486,7 @@ class Backtester:
                 ],
                 "native_broker_calls": 0,
                 "provider_calls": 0,
-                "telegram_calls": 0,
+                "outbound_report_calls": 0,
                 "live_enabled": False,
                 "auto_resume_production": False,
                 "financial_history_reset": False,

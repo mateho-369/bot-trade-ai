@@ -1,4 +1,4 @@
-"""Bounded diagnostic findings. A green check is NEVER an owner/stage/live approval."""
+"""Bounded diagnostic findings. A green check is NEVER an operator/stage/live approval."""
 
 from __future__ import annotations
 
@@ -91,15 +91,15 @@ class ReportBuilder:
             "observations": self.observations,
             "findings": [item.to_dict() for item in self.findings],
             "native_validation_complete": False,
-            "owner_authenticated": False,
             "stage_evidence": False,
             "trading_authorized": False,
+            "local_operator_authenticated": False,
             "automatic_resume": False,
             "financial_history_reset": False,
             "broker_connected": False,
             "actual_native_broker_calls": 0,
             "actual_provider_network_calls": 0,
-            "actual_telegram_network_calls": 0,
+            "actual_outbound_report_network_calls": 0,
             "actual_child_processes_spawned": 0,
             "real_orders": 0,
             "application_state_writes": 0,

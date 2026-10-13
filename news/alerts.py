@@ -1,7 +1,7 @@
-"""Deduplicated sanitized notification outbox in append-only audit rows.
+"""Deduplicated sanitized news report claims in append-only audit rows.
 
-Part 9 sends to the authenticated owner. Pending is not delivered; none of this
-pauses/resumes, closes a trade or calls Telegram/broker/network services.
+Claims are persisted before a local/outbound report attempt. This module cannot
+pause/resume, close a trade, or call a broker.
 """
 
 from __future__ import annotations
@@ -10,7 +10,6 @@ from datetime import timedelta
 
 from sqlalchemy import select
 
-from ai.owner_guard import require_owner
 from core.models import AuditLog
 from core.security import sanitize_text, sha256_json
 from news.exposure import ExposureMapper
@@ -141,50 +140,87 @@ class NewsAlerts:
             for row in rows:
                 if parse_time(row.details["expires_at"]) <= now:
                     continue
-                delivered = session.scalar(
+                attempted = session.scalar(
                     select(AuditLog.id)
                     .where(
-                        AuditLog.action == "news.alert_delivered",
+                        AuditLog.action.in_(("news.alert_delivered", "news.alert_report_attempted")),
                         AuditLog.details["alert_id"].as_string() == row.details["alert_id"],
                     )
                     .limit(1)
                 )
-                if not delivered:
+                if not attempted:
                     result.append({"queue_id": row.id, **row.details})
                 if len(result) >= limit:
                     break
             return result
 
-    def acknowledge(self, alert_id: str, *, owner_id: int):
-        """Trusted sender calls only AFTER successful owner delivery; Part 9 authenticates it."""
-        require_owner(self.settings, owner_id)
-        from trading.types import valid_key
-
-        valid_key(alert_id)
+    def claim_batch(self, limit=10):
+        if type(limit) is not int or not 1 <= limit <= 20:
+            raise ValueError("bounded news report batch required")
+        now = self.clock.now()
+        claimed = []
         with self.database.locked_session() as session:
-            pending = session.scalar(
-                select(AuditLog).where(
-                    AuditLog.action == "news.alert_pending",
-                    AuditLog.details["alert_id"].as_string() == alert_id,
-                    AuditLog.details["scope_hash"].as_string() == self.scope,
-                )
-            )
-            if pending is None:
-                raise ValueError("pending owner notification missing")
-            existing = session.scalar(
-                select(AuditLog.id)
+            rows = session.scalars(
+                select(AuditLog)
                 .where(
-                    AuditLog.action == "news.alert_delivered",
-                    AuditLog.details["alert_id"].as_string() == alert_id,
+                    AuditLog.action == "news.alert_pending",
+                    AuditLog.details["scope_hash"].as_string() == self.scope,
+                    AuditLog.time >= now - timedelta(minutes=15),
                 )
-                .limit(1)
+                .order_by(AuditLog.id)
+                .limit(100)
+            ).all()
+            for row in rows:
+                details = dict(row.details)
+                if parse_time(details["expires_at"]) <= now:
+                    continue
+                existing = session.scalar(
+                    select(AuditLog.id)
+                    .where(
+                        AuditLog.action.in_(("news.alert_delivered", "news.alert_report_attempted")),
+                        AuditLog.details["alert_id"].as_string() == details["alert_id"],
+                    )
+                    .limit(1)
+                )
+                if existing:
+                    continue
+                claim = self.database.add_audit(
+                    session,
+                    "news.alert_report_attempted",
+                    "reporter",
+                    {
+                        "alert_id": details["alert_id"],
+                        "scope_hash": self.scope,
+                        "remote_delivery_may_follow": True,
+                    },
+                )
+                claim.time = now
+                claimed.append(details)
+                if len(claimed) >= limit:
+                    break
+        return claimed
+
+    async def drain(self, reporter, *, limit=10):
+        import asyncio
+
+        result = {"reported": 0, "uncertain": 0, "disabled": 0}
+        for details in await asyncio.to_thread(self.claim_batch, limit):
+            symbols = ", ".join(details.get("symbols", [])[:10])
+            title = sanitize_text(details.get("title", ""), self.database.secrets)[:300]
+            message = (
+                f"{reporter.text('report_header')} · {reporter.text('news_alert')}\n"
+                f"{reporter.text('news_symbols')}: {symbols}\n{title}\n"
+                f"{reporter.text('news_coverage_blocked')}"
+            )[:1500]
+            status = await reporter.publish(
+                message,
+                kind="news.alert",
+                details={"kind": details.get("kind"), "symbols": details.get("symbols", [])},
             )
-            if existing:
-                return
-            row = self.database.add_audit(
-                session,
-                "news.alert_delivered",
-                "news",
-                {"alert_id": alert_id, "scope_hash": self.scope, "owner_id": owner_id},
-            )
-            row.time = self.clock.now()
+            if status == "sent":
+                result["reported"] += 1
+            elif status == "disabled":
+                result["disabled"] += 1
+            else:
+                result["uncertain"] += 1
+        return result

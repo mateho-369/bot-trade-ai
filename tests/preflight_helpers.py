@@ -1,6 +1,6 @@
 """TEST ONLY preflight fixtures: miniature sealed source, private .env, sentinels, fakes.
 
-Nothing here is a genuine Windows/VPS deployment, broker, provider, owner or stage fact.
+Nothing here is a genuine Windows/VPS deployment, broker, provider or stage fact.
 """
 
 import json
@@ -16,7 +16,6 @@ from tests.readiness_helpers import source_tree
 
 # Deliberate sentinels: a leak into any finding/observation/CLI output is a test failure.
 BOT_TOKEN = "123456789:SENTINEL-BOT-TOKEN-VALUE-abcdefghijklmnop"
-OWNER_ID = "4242424242"
 OPENAI_KEY = "sk-SENTINEL-OPENAI-KEY-VALUE"
 MT5_PASSWORD = "SENTINEL-MT5-PASSWORD"
 NEWS_KEY = "SENTINEL-NEWSAPI-KEY"
@@ -28,7 +27,7 @@ def private_environment(root, *, overrides=None, secret=True):
     text = (repository / ".env.example").read_text()
     values = {
         "TELEGRAM_BOT_TOKEN": BOT_TOKEN if secret else "",
-        "TELEGRAM_OWNER_ID": OWNER_ID if secret else "",
+        "TELEGRAM_REPORT_CHAT_ID": "123" if secret else "",
         "OPENAI_API_KEY": OPENAI_KEY if secret else "",
         "NEWS_API_KEY": NEWS_KEY if secret else "",
         **(overrides or {}),
@@ -97,7 +96,7 @@ def dumped(document):
 
 def assert_no_secret(document):
     text = dumped(document)
-    for secret in (BOT_TOKEN, OWNER_ID, OPENAI_KEY, MT5_PASSWORD, NEWS_KEY, "SENTINEL"):
+    for secret in (BOT_TOKEN, OPENAI_KEY, MT5_PASSWORD, NEWS_KEY, "SENTINEL"):
         assert secret not in text, secret
     assert document["secret_values_printed"] is False
 

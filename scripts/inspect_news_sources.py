@@ -75,7 +75,7 @@ async def probe(cfg, clock=None, transport=None):
                 error=None,
             )
         except Exception as exc:  # noqa: BLE001
-            calendar.update(events=0, error=type(exc).__name__ + ":" + str(exc)[:80])
+            calendar.update(events=0, error=type(exc).__name__)
             ok = False
     finally:
         await http.close()

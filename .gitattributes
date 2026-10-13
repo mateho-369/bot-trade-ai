@@ -1,3 +1,3 @@
 # Byte-exact release integrity: never convert line endings on checkout (Windows core.autocrlf).
-# docs/RELEASE_15_MANIFEST.json hashes raw bytes; CRLF conversion would fail verify_release.
+# docs/RELEASE_16_MANIFEST.json hashes raw bytes; CRLF conversion would fail verify_release.
 * -text

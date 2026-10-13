@@ -295,9 +295,11 @@ class MT5Client(ClientCalculations):
         ):
             self._quarantine("configured login/server mismatch")
             raise IdentityChanged("terminal does not match the configured login/server")
-        if self.settings.mode == OperatingMode.DEMO and kind != AccountKind.DEMO:
+        if (
+            self.settings.mode == OperatingMode.DEMO or self.settings.autonomous_demo
+        ) and kind != AccountKind.DEMO:
             self._quarantine("demo execution attached to a non-demo account")
-            raise IdentityChanged("DEMO_TRADING requires the terminal's actual DEMO account")
+            raise IdentityChanged("DEMO/AUTONOMOUS_DEMO requires the terminal-reported DEMO account")
         if self.settings.mode == OperatingMode.LIVE and kind != AccountKind.REAL:
             self._quarantine("live execution attached to a non-real account")
             raise IdentityChanged("LIVE_TRADING requires the terminal's actual REAL account")
@@ -363,7 +365,7 @@ class MT5Client(ClientCalculations):
         await self._call(self._connect_sync)
 
     async def reconnect(self) -> None:
-        # A reconnect never resets write quarantine, account pin or owner approval.
+        # A reconnect never resets write quarantine, account pin or local operator authorization.
         await self._call(self._connect_sync)
 
     def _shutdown_sync(self) -> None:

@@ -20,8 +20,10 @@ def test_native_profile_unknowns_remain_blocking_never_guessed_from_environment(
     findings, _ = inspect_host(root, profile="windows_native")
     assert {
         "interactive_session_and_ntfs_acl_unverified",
-        "native_feed_contract_and_owner_checks_unverified",
+        "native_feed_contract_and_local_operator_checks_unverified",
     }.issubset({item.code for item in findings if item.status == "blocked"})
+    native_check = next(item for item in findings if item.code.endswith("local_operator_checks_unverified"))
+    assert "local-operator" in native_check.message and "Telegram" not in native_check.message
 
 
 def test_read_only_disk_floor_and_unknown_do_not_probe_write_or_create_root(tmp_path, monkeypatch):

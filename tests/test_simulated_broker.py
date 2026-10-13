@@ -148,7 +148,7 @@ async def test_wrong_identity_close_duplicate_close_and_sl_never_loosened():
 
 
 async def test_daily_count_is_maximum_not_minimum_target():
-    # Owner-configured ceiling without AI-dynamic limits (the dynamic ceiling is tested in
+    # Reviewed-configured ceiling without AI-dynamic limits (the dynamic ceiling is tested in
     # tests/test_ai_fallback_mode.py and never exceeds the hard cap of 25).
     cfg = Settings(
         _env_file=None, max_daily_trades=1, min_daily_trades_target=0, ai_dynamic_limits_enabled=False

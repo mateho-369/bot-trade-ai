@@ -15,8 +15,8 @@ async def test_diagnostic_ignores_host_flags_secrets_and_cleans_temp_state(tmp_p
         "MT5_BACKEND": "real",
         "MT5_PASSWORD": "HOST_SECRET",
         "OPENAI_API_KEY": "HOST_OPENAI_SECRET",
-        "TELEGRAM_OWNER_ID": "bad",
-        "TELEGRAM_BOT_TOKEN": "HOST_TELEGRAM_SECRET",
+        "TELEGRAM_REPORT_CHAT_ID": "42",
+        "TELEGRAM_BOT_TOKEN": "HOST_REPORT_SECRET",
         "PROJECT_ROOT": str(tmp_path),
     }.items():
         monkeypatch.setenv(name, value)

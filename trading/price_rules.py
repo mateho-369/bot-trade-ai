@@ -105,7 +105,7 @@ def validate_entry(
     )
     limit = settings.spread_limit_points(logical, order.symbol)
     if tick.spread_points(symbol) > limit:
-        raise RiskViolation("spread exceeds the owner limit")
+        raise RiskViolation("spread exceeds the configured limit")
     if abs(tick.entry(order.side) - order.reference_price) > settings.max_slippage_points * symbol.point:
         raise RiskViolation("price moved outside the approved reference/deviation window")
 

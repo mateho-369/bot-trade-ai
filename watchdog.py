@@ -8,6 +8,7 @@ withheld. Restart reservations are append-only SQL audit records, not RAM counte
 from __future__ import annotations
 
 import argparse
+import asyncio
 import hashlib
 import logging
 import signal
@@ -26,16 +27,18 @@ from app.dependencies import require_existing_database
 from app.notifications import RuntimeNotices
 from app.process_guard import (
     ProcessLock,
+    atomic_json,
     operator_stop_path,
     operator_stop_requested,
     read_json,
     request_stop,
     require_interactive_native,
 )
+from app.reporter import Reporter
 from core.database import Database
 from core.logging_setup import configure_logging
 from core.models import AuditLog, BotState
-from core.settings import Settings
+from core.settings import Settings, live_trading_requested
 from trading.risk_types import source_code_hash
 from trading.types import SystemClock
 
@@ -60,7 +63,8 @@ class Watchdog:
         self.clock = clock or SystemClock()
         self.env_digest = hashlib.sha256(self.env_file.read_bytes()).hexdigest()
         self.code_hash = source_code_hash(settings.project_root)
-        self.notices = RuntimeNotices(database, settings, self.clock)
+        self.reporter = Reporter(settings, clock=self.clock)
+        self.notices = RuntimeNotices(database, settings, self.clock, self.reporter)
         self.child = self.identity = self.created = None
         self.launched_at = None
         self.stalled = False
@@ -68,6 +72,12 @@ class Watchdog:
         self.stopping = threading.Event()
         self.budget_reported = False
         self.ready_seen = False
+
+    def _drain_notices(self):
+        try:
+            asyncio.run(self.notices.drain(limit=10))
+        except Exception:
+            LOG.warning("Watchdog report delivery failed; local reports remain available")
 
     def unchanged(self):
         return (
@@ -124,6 +134,7 @@ class Watchdog:
         if not self.reserve_restart(identity):
             if not self.budget_reported:
                 self.notices.enqueue("budget", dedup="budget:" + self.clock.now().strftime("%Y%m%d%H"))
+                self._drain_notices()
                 self.budget_reported = True
             return "budget_exhausted"
         flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
@@ -153,6 +164,7 @@ class Watchdog:
         )
         if self.ever_started:
             self.notices.enqueue("restart", dedup=identity)
+            self._drain_notices()
         self.ever_started = True
         return "launched_paused"
 
@@ -262,6 +274,7 @@ class Watchdog:
         request_stop(self.settings, self.identity)
         if not self.stalled:
             self.notices.enqueue("stalled", dedup=self.identity)
+            self._drain_notices()
             self.database.audit(
                 "watchdog.replacement_withheld",
                 "watchdog",
@@ -277,7 +290,7 @@ class Watchdog:
         require_interactive_native(self.settings)
         with ProcessLock(self.settings.resolve_path(self.settings.watchdog_lock_file)):
             if clear_stop_request:
-                operator_stop_path(self.settings).unlink(missing_ok=True)
+                atomic_json(operator_stop_path(self.settings), {"stop": False})
             while not self.stopping.is_set():
                 try:
                     self.tick()
@@ -305,6 +318,9 @@ def main(argv=None):
     try:
         if not args.env_file.is_file():
             print("Reviewed .env required. Watchdog does not initialize or migrate databases.")
+            return 2
+        if live_trading_requested(args.env_file):
+            print("LIVE_TRADING=true is refused in this build; live orders cannot be started.")
             return 2
         settings = Settings(_env_file=args.env_file, project_root=args.env_file.resolve().parent)
         if not (settings.project_root / "main.py").is_file():

@@ -337,5 +337,5 @@ def test_definitive_rejection_after_unknown_releases_once_but_does_not_auto_resu
         assert risk.reserved_risk_usd == 0 and risk.accepted_entries_today == 0
         assert session.get(BotState, 1).last_error == "unknown_execution"
     assert engine.database.status()["state"] == "paused"
-    with pytest.raises(TradingDisabled, match="recovery"):
+    with pytest.raises(TradingDisabled, match="designated_halt"):
         engine.control.resume(OWNER, account_key=engine.account_key)

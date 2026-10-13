@@ -329,7 +329,7 @@ class SignalResult:
 
     @property
     def approved(self) -> bool:
-        # Technical/review approval ONLY. Owner/risk/stage approval remains separate.
+        # Technical/review approval ONLY. Local operator/risk/stage authorization remains separate.
         return self.state == "approved" and self.context is not None
 
     def payload(self) -> dict:

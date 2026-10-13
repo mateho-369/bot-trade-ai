@@ -1,6 +1,6 @@
 """TEST_ONLY offline runtime + scripted supervisor. Ignores dotenv/process env.
 
-No Telegram/provider/native broker calls, child-process spawn, order or stage
+No report/provider/native broker calls, child-process spawn, order or stage
 eligibility. SQL bootstrap here is an isolated TEST fixture, never production.
 """
 
@@ -47,8 +47,6 @@ async def run(directory):
         _env_file=None,
         project_root=directory,
         symbols=("EURUSD",),
-        runtime_api_enabled=False,
-        runtime_telegram_enabled=False,
         runtime_backup_enabled=False,
         ai_provider="disabled",
         ai_fallback_provider="disabled",
@@ -62,12 +60,16 @@ async def run(directory):
     try:
         r, jobs = service.resources, service.scheduler
         checks["always_start_paused"] = r.database.status()["state"] == "paused"
-        checks["same_guarded_resources"] = r.owner.execution is r.engine and r.owner.news is r.news
+        checks["same_guarded_resources"] = (
+            r.engine.broker is r.broker
+            and r.signals.database is r.database
+            and r.supervisor.database is r.database
+        )
         checks["paused_entry_job_has_no_effect"] = (await jobs.run_job("signals"))["executed"] == 0
         checks["paused_protection_still_runs"] = (await jobs.run_job("positions"))["managed_positions"] == 0
         await jobs.run_job("news")
         checks["unconfigured_news_unknown"] = not (await r.news.window("EURUSD")).known
-        checks["no_telegram_transport"] = r.telegram is None
+        checks["optional_reporter_disabled"] = r.reporter is not None and not r.reporter.enabled
         checks["learning_disabled"] = (await jobs.run_job("learning"))["state"] == "disabled"
         with r.database.session() as sql:
             checks["no_order_intents"] = sql.scalar(select(OrderIntent.id)) is None
@@ -89,10 +91,12 @@ async def run(directory):
             return child
 
         supervisor = Watchdog(settings, db, env_file, popen=scripted_popen)
-        checks["scripted_supervisor_launch_paused"] = supervisor.tick() == "launched_paused"
+        checks["scripted_supervisor_launch_paused"] = (
+            await asyncio.to_thread(supervisor.tick) == "launched_paused"
+        )
         children[0].exit = 1
         checks["scripted_confirmed_exit_restart"] = (
-            supervisor.tick() == "launched_paused" and len(children) == 2
+            await asyncio.to_thread(supervisor.tick) == "launched_paused" and len(children) == 2
         )
         with db.session() as sql:
             checks["scripted_restart_never_resumes"] = sql.get(BotState, 1).desired_state == "paused"
@@ -103,7 +107,7 @@ async def run(directory):
         "fixture_only": True,
         "checks_passed": len(checks),
         "checks": checks,
-        "actual_telegram_network_calls": 0,
+        "actual_outbound_report_network_calls": 0,
         "actual_provider_network_calls": 0,
         "actual_native_broker_calls": 0,
         "actual_child_processes_spawned": 0,

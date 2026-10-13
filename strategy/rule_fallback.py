@@ -14,7 +14,7 @@ pass the CURRENT effective mode (``trading.ai_controls.fallback_mode``: DB owner
 The review's confidence is EXACTLY the persisted technical signal score, so finalization and the
 pre-send risk recheck can verify it was not fabricated. It approves only at or above
 AI_RULE_FALLBACK_MIN_SCORE (validated >= AI_CONFIDENCE_THRESHOLD and MIN_SIGNAL_SCORE). It never
-changes risk size, SL, owner pause/kill, stage gates or broker write authority.
+changes risk size, SL, local pause/kill, stage gates or broker write authority.
 """
 
 from __future__ import annotations

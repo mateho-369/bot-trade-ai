@@ -30,7 +30,7 @@ class FakeChild:
 
 @pytest.fixture
 def system(tmp_path):
-    s = config(tmp_path, runtime_telegram_enabled=False)
+    s = config(tmp_path)
     d = Database(s)
     d.initialize()
     env = tmp_path / ".env"
@@ -172,16 +172,17 @@ def test_invalid_or_unready_evidence_never_kills_or_replaces_alive_child(system,
     assert len(system.children) == 1 and w.child.poll() is None
 
 
-def test_confirmed_exit_is_required_before_replacement_and_notice(system):
+def test_confirmed_exit_is_required_before_replacement_and_local_report(system):
     w = system.w
     w.tick()
     first = w.identity
     system.children[0].exit = 1
     assert w.tick() == "launched_paused"
     assert w.identity != first and len(system.children) == 2
+    report = (w.reporter.reports_dir / "actions.log").read_text(encoding="utf-8")
+    assert "Watchdog started a replacement" in report
+    assert not w.reporter.enabled
     with system.d.session() as db:
-        queued = db.scalars(select(AuditLog).where(AuditLog.action == "runtime.notice_pending")).all()
-        assert any(row.details["kind"] == "restart" for row in queued)
         exits = db.scalars(select(AuditLog).where(AuditLog.action == "watchdog.child_exited")).all()
         assert len(exits) == 1 and exits[0].details["exit_confirmed"]
 

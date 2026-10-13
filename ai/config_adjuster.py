@@ -1,35 +1,25 @@
-"""AI dynamic config adjustment: AI SUGGESTS, bounds decide, owner APPROVES big changes.
+"""AI dynamic configuration: model suggestions stay inside strict, reviewed bounds.
 
 Two layers (see ``trading.ai_controls``):
 
-Layer 1 – AI-adjustable inside these bounds (module constants, never loosened by AI or .env here):
+Layer 1 – AI-adjustable inside fixed module bounds:
 
-* max_daily_trades        6..20       owner default MAX_DAILY_TRADES (12)
-* max_open_positions      1..5        owner default MAX_OPEN_POSITIONS (3)
-* risk_percent_per_trade  0.1..1.0 %  owner default MAX_RISK_PERCENT_PER_TRADE (0.5)
-* target_profit_per_trade $1..$20     owner default TARGET_PROFIT_USD_PER_TRADE (5)
-* max_spread_points       10..50      effective = min(overlay, global cap); never applied to a
-                                        symbol with an explicit SYMBOL_SPREAD_LIMITS_JSON entry
-* skip_trailing_levels    {30,60,90}  skips the AI CONSULTATION only; mechanical locks still fire
-* strategy_weights        major only  routed to the existing owner proposal (rebalance_weights)
-* symbols_to_trade        major only  subset of the owner-configured SYMBOLS (remove/re-add)
+* max_daily_trades        6..20       configured default MAX_DAILY_TRADES (12)
+* max_open_positions      1..5        configured default MAX_OPEN_POSITIONS (3)
+* risk_percent_per_trade  0.1..1.0 %  configured default MAX_RISK_PERCENT_PER_TRADE (0.5)
+* target_profit_per_trade $1..$20     configured default TARGET_PROFIT_USD_PER_TRADE (5)
+* max_spread_points       10..50      never above the global cap or explicit symbol cap
+* skip_trailing_levels    {30,60,90}  skips AI consultation only; mechanical locks still fire
+* strategy_weights        major only  kept as a local review proposal
+* symbols_to_trade        major only  subset of configured SYMBOLS
 
-Layer 2 – hard caps the AI can NEVER exceed: 25 trades/day, 5 open positions, 1.0 % risk; daily
-loss 3 % and drawdown 10 % latch an auto-pause (risk engine). FORBIDDEN parameters (always rejected
-+ audited): kill switch, live/paper mode, start paused, daily-loss/drawdown caps, news/safety gates,
-broker write authority, the owner's MAX_RISK_PERCENT_PER_TRADE setting itself.
+Layer 2 – hard caps the AI can NEVER exceed: 25 trades/day, 5 open positions, 1.0% risk;
+daily-loss and drawdown latches, news/safety gates, kill, mode, startup pause and broker-write
+authority are not adjustable by AI. Increases need a strong trend and non-high news risk.
 
-Rules:
-
-* An INCREASE of trades/day, open positions or risk is accepted only when the market context is a
-  strong trend (regime ``trending`` = ADX >= 25 with efficient movement) and news risk is not high;
-  otherwise it is rejected with ``increase_requires_strong_trend``. Decreases are always allowed.
-* A change of more than 50 % relative to the owner default needs owner approval (Telegram
-  /approve /reject or Mini App). Changes within 50 % auto-apply when AI_CONFIG_AUTO_APPLY_MINOR=true.
-  Non-numeric changes (weights, symbols, skip levels) always need approval.
-* Every proposal, application, rejection and forbidden attempt is written to ``config_history`` and
-  ``audit_logs`` with its reason. Applied limit values are materialized into ``dynamic_config``,
-  which the risk engine reads ONLY while the AI is available (else owner defaults apply).
+Changes within 50% may auto-apply when AI_CONFIG_AUTO_APPLY_MINOR=true. Major/non-numeric
+changes stay pending until a current local operator uses a reviewed typed transition. Every
+proposal, decision and rejection is audited; stale AI availability returns to configured defaults.
 """
 
 from __future__ import annotations
@@ -71,7 +61,7 @@ ABSOLUTE_MAX_DAILY_TRADES = HARD_MAX_DAILY_TRADES
 ABSOLUTE_MAX_OPEN_POSITIONS = HARD_MAX_OPEN_POSITIONS
 INTEGER_PARAMETERS = frozenset({"max_daily_trades", "max_open_positions", "max_spread_points"})
 INCREASE_GUARDED = frozenset({"max_daily_trades", "max_open_positions", "risk_percent_per_trade"})
-APPROVAL_RELATIVE_CHANGE = Decimal("0.5")  # > 50 % vs the owner default => owner approval.
+APPROVAL_RELATIVE_CHANGE = Decimal("0.5")  # > 50 % vs the configured default => local operator review.
 ADJUSTABLE = frozenset({*HARD_LIMITS, "skip_trailing_levels", "strategy_weights", "symbols_to_trade"})
 FORBIDDEN = frozenset(
     {
@@ -89,7 +79,7 @@ FORBIDDEN = frozenset(
     }
 )
 TRAILING_LEVELS = (30, 60, 90)
-OVERLAY_CACHE_SECONDS = 15  # Owner /ai_reset from the Telegram process is honored within 15 s.
+OVERLAY_CACHE_SECONDS = 15  # Local operator overlay changes are honored within 15 s.
 
 
 @dataclass(frozen=True, slots=True)
@@ -175,7 +165,7 @@ class AIConfigAdjuster:
         self._cached_at = 0.0
 
     # -- overlay ------------------------------------------------------------------------------
-    def _owner_value(self, parameter: str):
+    def _configured_default(self, parameter: str):
         cfg = self.settings
         return {
             "risk_percent_per_trade": str(cfg.effective_risk_percent),
@@ -202,7 +192,7 @@ class AIConfigAdjuster:
         return dict(self._cache)
 
     def limits(self):
-        """Current layer-1 limits (owner defaults while the AI is unavailable)."""
+        """Current layer-1 limits (configured defaults while the AI is unavailable)."""
         return effective_limits(self.database, self.settings, self.clock)
 
     def effective(self) -> dict:
@@ -235,10 +225,10 @@ class AIConfigAdjuster:
         self.database.audit(action, "ai", details)
 
     def _classify(self, parameter: str, value) -> str:
-        """minor = within 50 % of the OWNER DEFAULT (auto); major = owner approval required."""
+        """minor = within 50 % of the configured default (auto); major = local operator review required."""
         if parameter not in HARD_LIMITS:
             return "major"
-        default = Decimal(str(self._owner_value(parameter)))
+        default = Decimal(str(self._configured_default(parameter)))
         if default <= 0:
             return "major"
         change = abs(Decimal(str(value)) - default) / default
@@ -287,13 +277,13 @@ class AIConfigAdjuster:
             return AdjustmentResult(parameter, value, "forbidden", "rejected", "hard_limit_parameter")
         try:
             canonical = validate_value(self.settings, parameter, value)
-        except ValueError as exc:
+        except ValueError:
             self._audit(
                 "ai.config_out_of_bounds",
-                {"parameter": parameter, "value": str(value)[:64], "reason": str(exc)[:120]},
+                {"parameter": parameter, "reason": "out_of_bounds", "applied": False},
             )
-            return AdjustmentResult(parameter, value, "invalid", "rejected", str(exc))
-        current = self.overlay().get(parameter, self._owner_value(parameter))
+            return AdjustmentResult(parameter, None, "invalid", "rejected", "out_of_bounds")
+        current = self.overlay().get(parameter, self._configured_default(parameter))
         if canonical == current:
             return AdjustmentResult(parameter, canonical, "unchanged", "unchanged", "no_change")
         if (
@@ -390,7 +380,7 @@ class AIConfigAdjuster:
             )
             return stored.suggestion_id
         except TradingDisabled:
-            return None  # Outside the owner-safe step policy: stays a pending journal record only.
+            return None  # Outside the locally reviewed step policy: stays a pending journal record only.
 
     def _materialize(self, session) -> None:
         """Rebuild ``dynamic_config`` from the latest APPLIED value of each layer-1 parameter."""
@@ -438,10 +428,11 @@ class AIConfigAdjuster:
             )
         return results
 
-    # -- owner decisions ----------------------------------------------------------------------
-    def decide(self, overlay_id: int, *, owner_id: int, approve: bool) -> AdjustmentResult:
-        if self.settings.telegram_owner_id is None or owner_id != self.settings.telegram_owner_id:
-            raise TradingDisabled("only the configured owner may decide AI config adjustments")
+    # -- local operator decisions ---------------------------------------------------------------
+    def decide(self, overlay_id: int, *, operator, approve: bool) -> AdjustmentResult:
+        from ai.local_operator_guard import require_local_operator
+
+        operator_id = require_local_operator(operator)
         with self.database.session() as session:
             row = session.get(AIConfigOverlay, overlay_id)
             if row is None or row.status != "pending":
@@ -454,13 +445,13 @@ class AIConfigAdjuster:
             self._materialize(session)
             self.database.add_audit(
                 session,
-                "owner.ai_config_decided",
-                "owner",
+                "local_operator.ai_config_decided",
+                "local_operator",
                 {
                     "overlay_id": row.id,
                     "parameter": row.parameter,
                     "decision": row.status,
-                    "owner_id": owner_id,
+                    "operator_id": operator_id,
                 },
             )
             result = AdjustmentResult(
@@ -469,8 +460,8 @@ class AIConfigAdjuster:
         self._cache = None
         return result
 
-    def sync_owner_decisions(self) -> int:
-        """Mirror Telegram/Mini App decisions on linked proposals into the overlay."""
+    def sync_operator_decisions(self) -> int:
+        """Mirror local operator decisions on linked proposals into the overlay."""
         changed = 0
         with self.database.session() as session:
             rows = session.scalars(
@@ -499,7 +490,7 @@ class AIConfigAdjuster:
                 changed += 1
                 self.database.add_audit(
                     session,
-                    "ai.config_owner_decision_synced",
+                    "ai.config_local_decision_synced",
                     "ai",
                     {"overlay_id": row.id, "suggestion_id": row.suggestion_id, "status": row.status},
                 )
@@ -563,13 +554,16 @@ class AIConfigAdjuster:
             f"positions {limits['max_open_positions']}, risk {limits['risk_percent']}%, "
             f"target ${limits['target_usd']}",
             *data["changes"],
-            "Reset: Mini App Settings 'Reset AI to defaults' or /ai_reset",
+            "Reset AI overlays only with the explicit reviewed local operator command.",
         ]
         return "\n".join(lines)
 
 
-def revert_all(database: Database, clock: Clock, *, owner_id: int) -> int:
-    """Owner override (/ai_reset): every applied or pending AI overlay change is reverted."""
+def revert_all(database: Database, clock: Clock, *, operator) -> int:
+    """Local operator reset: revert pending/applied overlays without clearing risk latches."""
+    from ai.local_operator_guard import require_local_operator
+
+    operator_id = require_local_operator(operator)
     ensure_journal_tables(database)
     with database.session() as session:
         rows = session.scalars(
@@ -577,13 +571,13 @@ def revert_all(database: Database, clock: Clock, *, owner_id: int) -> int:
         ).all()
         for row in rows:
             row.status, row.decided_at = "reverted", clock.now()
-        cleared = clear_dynamic(session)  # Owner defaults apply immediately.
+        cleared = clear_dynamic(session)  # Reviewed configuration defaults apply immediately.
         database.add_audit(
             session,
-            "owner.ai_config_reset",
-            "owner",
+            "local_operator.ai_config_reset",
+            "local_operator",
             {
-                "owner_id": owner_id,
+                "operator_id": operator_id,
                 "reverted": len(rows),
                 "dynamic_cleared": cleared,
                 "ids": [r.id for r in rows][:100],

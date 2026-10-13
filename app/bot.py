@@ -15,7 +15,7 @@ from pathlib import Path
 from app.lifecycle import RuntimeLifecycle
 from app.process_guard import managed_id
 from core.logging_setup import configure_logging
-from core.settings import Settings
+from core.settings import Settings, live_trading_requested
 
 
 def main(argv=None):
@@ -23,6 +23,9 @@ def main(argv=None):
     parser.add_argument("--env-file", type=Path, default=Path(".env"))
     parser.add_argument("--managed-id", type=managed_id)
     args = parser.parse_args(argv)
+    if live_trading_requested(args.env_file):
+        print("LIVE_TRADING=true is refused in this build; live orders cannot be started.")
+        return 2
     try:
         if not args.env_file.is_file():
             print("Reviewed existing .env required. Initialize the DB explicitly before starting.")

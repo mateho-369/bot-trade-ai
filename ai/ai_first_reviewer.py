@@ -62,7 +62,7 @@ class AIFirstReviewer:
 
     async def review(self, proposal: SignalResult, news: NewsWindow) -> AIEntryReview | None:
         if self.settings.ai_provider == "disabled":
-            return None  # Deliberate owner choice: never a rule-based approval.
+            return None  # Deliberate reviewed policy: never a rule-based approval.
         if self.brain.provider is None and self.inner is not None:
             return await self._delegate(proposal, news)
         try:

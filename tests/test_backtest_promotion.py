@@ -1,4 +1,4 @@
-"""TEST ONLY hand-authored artifacts, signatures and native tags. NO genuine promotion or price evidence."""
+"""TEST ONLY hand-authored artifacts and native tags. No genuine promotion or price evidence."""
 
 import hashlib
 from datetime import timedelta
@@ -10,8 +10,7 @@ from backtesting.promotion import export_ledger_stage, import_reviewed_stage, na
 from core.database import Database
 from core.models import AuditLog, BotState, DeploymentEvidence, OrderIntent, Trade
 from core.security import canonical_json
-from scripts.synthetic_owner_fixtures import signed_fixture
-from tests.risk_helpers import MOMENT, OWNER, config
+from tests.risk_helpers import BAD_OPERATOR, MOMENT, OPERATOR_ID, OWNER, config
 from trading.risk_types import RuntimeProfile
 from trading.types import ManualClock, SourceKind, TradingDisabled
 
@@ -57,48 +56,39 @@ def invoke(sample, **changes):
     values = {
         "report_path": path,
         "confirm_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
-        "owner_init_data": signed_fixture(cfg, clock),
+        "operator": OWNER,
     }
     values.update(changes)
     return import_reviewed_stage(db, cfg, clock, **values)
 
 
-def test_signed_owner_import_is_append_only_idempotent_and_not_resume_or_live(sample):
+def test_local_operator_import_is_append_only_idempotent_and_not_resume_or_live(sample):
     cfg, db, clock, _, path = sample
     evidence_id = invoke(sample)
     assert invoke(sample) == evidence_id
     with db.session() as session:
         evidence = session.get(DeploymentEvidence, evidence_id)
-        assert evidence.stage == "backtest" and evidence.owner_reviewed_by == OWNER
+        assert evidence.stage == "backtest" and evidence.owner_reviewed_by == OPERATOR_ID
         state = session.get(BotState, 1)
         assert state.desired_state == "paused" and state.session_id is None
         assert len(session.scalars(select(DeploymentEvidence)).all()) == 1
         assert session.scalar(select(Trade)) is None and session.scalar(select(OrderIntent)) is None
-        audit = session.scalar(select(AuditLog).where(AuditLog.action == "owner.stage_evidence_reviewed"))
-        assert audit.details["authentication"] == "fresh_telegram_initdata_hmac"
+        audit = session.scalar(
+            select(AuditLog).where(AuditLog.action == "local_operator.stage_evidence_reviewed")
+        )
+        assert audit.details["authentication"] == "current_local_operator"
         assert not audit.details["grants_resume"] and not audit.details["grants_live"]
         assert "initData" not in canonical_json(audit.details)
     assert not cfg.live_trading and path.is_file()
 
 
-@pytest.mark.parametrize("bad_auth", ["", "user_id=42", "hash=" + "0" * 64, "123", None])
-def test_stage_import_rejects_raw_ids_or_invalid_bearers_without_db_mutation(sample, bad_auth):
-    from app.owner_identity import OwnerInterfaceError
-
+@pytest.mark.parametrize("operator", [None, 42, True, BAD_OPERATOR])
+def test_stage_import_rejects_noncurrent_local_operators_without_db_mutation(sample, operator):
     _, db, _, _, _ = sample
-    with pytest.raises(OwnerInterfaceError):
-        invoke(sample, owner_init_data=bad_auth)
+    with pytest.raises(TradingDisabled, match="local operator"):
+        invoke(sample, operator=operator)
     with db.session() as session:
         assert session.scalar(select(DeploymentEvidence)) is None
-
-
-@pytest.mark.parametrize("fields", [{"user": '{"id":43}'}, {"auth_date": "1"}, {"user": '{"id":true}'}])
-def test_wrong_owner_expired_or_bool_identity_never_reviews_stage(sample, fields):
-    from app.owner_identity import OwnerInterfaceError
-
-    cfg, _, clock, _, _ = sample
-    with pytest.raises(OwnerInterfaceError):
-        invoke(sample, owner_init_data=signed_fixture(cfg, clock, fields=fields))
 
 
 @pytest.mark.parametrize(
@@ -116,7 +106,7 @@ def test_wrong_owner_expired_or_bool_identity_never_reviews_stage(sample, fields
         ("finished_at", "2030-01-01T00:00:00+00:00"),
     ],
 )
-def test_labels_research_and_stale_scopes_are_not_owner_qualification(sample, field, value):
+def test_labels_research_and_stale_scopes_are_not_local_qualification(sample, field, value):
     _, db, _, report, path = sample
     report[field] = value
     path.write_text(canonical_json(report))
@@ -149,14 +139,12 @@ def test_import_rechecks_quality_and_cost_chronology_not_report_labels(sample, f
         assert session.scalar(select(DeploymentEvidence)) is None
 
 
-def test_owner_confirmation_digest_binds_exact_file_bytes(sample):
+def test_local_confirmation_digest_binds_exact_file_bytes(sample):
     cfg, db, clock, _, path = sample
     old = hashlib.sha256(path.read_bytes()).hexdigest()
     path.write_text(path.read_text() + "\n")
     with pytest.raises(TradingDisabled):
-        import_reviewed_stage(
-            db, cfg, clock, report_path=path, confirm_sha256=old, owner_init_data=signed_fixture(cfg, clock)
-        )
+        import_reviewed_stage(db, cfg, clock, report_path=path, confirm_sha256=old, operator=OWNER)
 
 
 @pytest.mark.parametrize("kind", ["active_session", "running", "dataset_changed", "symlink", "outside"])

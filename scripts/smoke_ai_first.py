@@ -5,7 +5,7 @@
     python -m scripts.smoke_ai_first --provider groq # REAL Groq call for the decision step only;
                                                      # key read from OPENAI_API_KEY env var
 
-No broker connection, no native SDK, no Telegram send, no real order. A temporary SQLite database
+No broker connection, no native SDK, no remote report, no real order. A temporary SQLite database
 is created and destroyed. Engineered mock quotes prove ordering/permissions, NOT profitability.
 """
 
@@ -31,11 +31,12 @@ from ai.market_awareness import MarketAwarenessEngine, NewsContext, PerformanceT
 from ai.ollama_client import ProviderContent
 from ai.trade_attribution import history, sync
 from ai.trade_audit import audit_trades, format_report
+from app.reporter import Reporter
 from core.database import Database
+from core.local_operator import LocalOperator
 from core.models import Trade
 from core.security import sha256_json
 from core.settings import Settings
-from telegram_bot.ai_notifications import AIOwnerNotifier
 from trading.ai_adaptive_trailing import AdaptiveTrailing
 from trading.execution import ExecutionEngine
 from trading.mock_mt5 import MockMT5Client
@@ -104,8 +105,6 @@ def settings_for(directory: str, provider: str) -> SmokeSettings:
         _env_file=None,
         project_root=Path(directory),
         symbols=("EURUSD",),
-        telegram_owner_id=1,
-        telegram_bot_token="123456789:TEST_ONLY_NOT_USED",
         max_slippage_points=2,
         atr_trailing_enabled=False,
         ai_queue_min_interval_ms=0,
@@ -123,7 +122,7 @@ def settings_for(directory: str, provider: str) -> SmokeSettings:
 
 
 async def open_paper_position(engine, clock):
-    engine.control.resume(1, account_key=engine.account_key)
+    engine.control.resume(LocalOperator.current(), account_key=engine.account_key)
     context = DecisionContext(
         clock.now(),
         clock.now() - timedelta(seconds=60),
@@ -160,7 +159,7 @@ async def run(provider_name: str) -> dict:
         try:
             await engine.initialize()
             journal = DecisionJournal(database, clock)
-            notifier = AIOwnerNotifier(cfg)
+            notifier = Reporter(cfg, secrets=database.secrets, clock=clock, console=lambda _: None)
             adjuster = AIConfigAdjuster(database, cfg, clock, notifier=notifier)
             awareness = MarketAwarenessEngine(
                 broker,
@@ -203,8 +202,11 @@ async def run(provider_name: str) -> dict:
                 for _ in range(3):
                     await brain.decide(snapshot)
                 checks["circuit_open_rule_mode"] = brain.mode == "rule"
-                checks["owner_notified_of_outage"] = any("rule" in t.lower() for t in notifier.outbox)
-                # Owner AI_FALLBACK_MODE: BLOCK (default) => no entry; TECHNICAL_ONLY => technical score.
+                actions_log = notifier.reports_dir / "actions.log"
+                checks["outage_reported_locally"] = (
+                    actions_log.is_file() and "AI circuit open" in actions_log.read_text(encoding="utf-8")
+                )
+                # Local AI_FALLBACK_MODE: BLOCK (default) => no entry; TECHNICAL_ONLY => technical score.
                 blocked = await brain.decide(snapshot)
                 checks["block_mode_blocks_entries"] = (
                     blocked.source == "ai_blocked" and not blocked.executable
@@ -289,7 +291,9 @@ async def run(provider_name: str) -> dict:
             elif provider_name == "groq":
                 # Groq mode trails with the ScriptedProvider brain, so the journal
                 # source is "ai"; the mechanical path belongs to outage (--provider rule).
-                checks["scripted_trailing_executed"] = bool(trailing) and all(row[1] == "ai" for row in trailing)
+                checks["scripted_trailing_executed"] = bool(trailing) and all(
+                    row[1] == "ai" for row in trailing
+                )
             else:
                 checks["mechanical_fallback"] = all(row[1] == "mechanical" for row in trailing)
             try:

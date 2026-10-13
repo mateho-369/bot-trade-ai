@@ -1,10 +1,9 @@
-"""Release-builder tool: write docs/RELEASE_15_MANIFEST.json from the CURRENT source tree.
+"""Release-builder tool: write docs/RELEASE_16_MANIFEST.json from the CURRENT source tree.
 
-Run this ONLY after reviewing the exact source you intend to release, and after the full test suite
-passed on that same source. It hashes bytes; it does not sign anything, prove provenance, start a
-runtime, read .env/credentials, open a database, contact a network/broker or grant any permission.
-
-    python -B -m scripts.build_release_manifest --pytest-passed 2649
+Run this ONLY after reviewing the exact source you intend to release and after the full test suite
+passes on that same source. Supply the actual passing-test count from that run. The builder hashes
+bytes; it does not sign anything, prove provenance, start a runtime, read .env/credentials, open a
+database, contact a network/broker or grant any permission.
 
 Then verify the result with the ordinary read-only checker:
 
@@ -25,9 +24,9 @@ from readiness.files import MAX_DECLARED_FILES, MAX_FILE_BYTES, MAX_TOTAL_BYTES
 from readiness.integrity import IGNORED, _secret_file
 
 ROOT = Path(__file__).resolve().parents[1]
-MANIFEST = "docs/RELEASE_15_MANIFEST.json"
-PREDECESSOR = "docs/RELEASE_14_MANIFEST.json"
-RELEASE = "0.13.0"
+MANIFEST = "docs/RELEASE_16_MANIFEST.json"
+PREDECESSOR = "docs/RELEASE_15_MANIFEST.json"
+RELEASE = "0.14.0"
 
 
 def collect(root: Path, manifest_name: str) -> dict[str, dict[str, object]]:
@@ -57,32 +56,31 @@ def build(root: Path, *, pytest_passed: int, manifest_name: str = MANIFEST) -> d
         "release": RELEASE,
         "database_schema": 2,
         "date": date.today().isoformat(),
-        "cumulative_parts": list(range(1, 16)),
+        "cumulative_parts": list(range(1, 17)),
         "archive_root": "mt5_ai_reflex_bot",
         "packaged_files": len(records) + 1,
         "hashed_files": len(records),
         "python_sources": sum(Path(name).suffix == ".py" for name in records),
         "pytest_passed": pytest_passed,
-        "part15_scope": [
-            "deployment_preflight_fixes",
-            "groq_openai_compatible_strict_json_schema",
-            "ai_rule_based_fallback",
-            "release_manifest_builder",
-            "cent_account_usc_euc",
-            "dynamic_symbol_discovery",
-            "bounded_multi_day_logging",
+        "part16_scope": [
+            "shared_resume_gates_and_autonomous_demo_recovery",
+            "local_operator_controls_and_ops_cli",
+            "remove_telegram_controls_mini_app_and_owner_api",
+            "outbound_only_telegram_reporting_and_local_reports",
+            "prompt_free_windows_demo_startup_and_preflight",
+            "readiness_docs_tests_and_release_manifest",
         ],
         "evidence": (
-            "strictly offline synthetic/software/scripted-HTTP fixture regression; NOT genuine "
-            "history/owner/native/provider/strategy qualification"
+            "offline synthetic/software/scripted-HTTP fixture regression; NOT genuine "
+            "history/local-operator/windows-native/provider/strategy qualification"
         ),
-        "predecessor_part14": {
+        "predecessor_part15": {
             "manifest_sha256": hashlib.sha256(predecessor.read_bytes()).hexdigest()
             if predecessor.is_file()
             else None,
             "actual_pytest_passed": previous.get("pytest_passed"),
             "source_hashes_verified": False,
-            "note": "Part 14 bytes were superseded by Part 15 edits; its manifest is historical only.",
+            "note": "Part 15 bytes were superseded by Part 16 edits; its manifest is historical only.",
         },
         "manifest_self_hash_excluded": True,
         "integrity_is_not_signature_or_trading_permission": True,

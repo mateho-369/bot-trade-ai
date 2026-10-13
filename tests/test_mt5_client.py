@@ -309,7 +309,7 @@ async def test_nonblocking_timeout_or_cancel_quarantines_and_drains_late_ack(can
     task = asyncio.create_task(client.open_market_buy(order()))
     try:
         assert await asyncio.to_thread(sdk.send_entered.wait, 1)
-        # A blocked SDK worker must not block the event loop / Telegram polling.
+        # A blocked SDK worker must not block the event loop / scheduler.
         sentinel = asyncio.create_task(asyncio.sleep(0.001, result="responsive"))
         assert await sentinel == "responsive"
         if cancel:
@@ -381,7 +381,7 @@ async def test_read_timeout_latches_writes_and_is_not_reported_as_empty_data():
         await client.shutdown()
 
 
-async def test_close_and_modify_keep_owner_identifiers_and_idempotency_after_time_changes():
+async def test_close_and_modify_keep_position_identifiers_and_idempotency_after_time_changes():
     cfg, clock = demo(), ManualClock(NOW)
     sdk, authority = FakeSDK(clock), FixtureAuthority(cfg, clock)
     sdk.positions = (sdk.owned_position(),)
@@ -477,24 +477,17 @@ async def test_native_candles_closed_only_and_deals_include_cost_and_cash_legs()
             await client.get_deals(NOW)
 
 
-async def test_live_requires_owner_gate_in_addition_to_config_flags():
-    cfg = Settings(
-        _env_file=None,
-        mt5_backend="real",
-        paper_trading=False,
-        demo_mode=False,
-        live_trading=True,
-        telegram_bot_token="123:TEST-ONLY-NOT-A-REAL-TOKEN",
-        telegram_owner_id=1,
-    )
-    clock, sdk = ManualClock(NOW), None
-    sdk = FakeSDK(clock)
-    sdk.account.trade_mode = 2
-    authority = FixtureAuthority(cfg, clock)
-    async with MT5Client(cfg, sdk=sdk, clock=clock, authority=authority) as client:
-        with pytest.raises(TradingDisabled, match="owner"):
-            await client.open_market_buy(order(sl=D("2609.90")))
-        assert not sdk.requests
+def test_live_trading_flag_is_refused_before_native_client_creation():
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError, match="LIVE_TRADING=true is refused"):
+        Settings(
+            _env_file=None,
+            mt5_backend="real",
+            paper_trading=False,
+            demo_mode=False,
+            live_trading=True,
+        )
 
 
 def test_unmarked_sdk_injection_cannot_accidentally_use_native_module():
@@ -565,7 +558,7 @@ async def test_post_check_hook_can_veto_a_previously_valid_permit_before_native_
         def before_send(self, command, snapshot, grant):
             assert snapshot.data_source == SourceKind.TEST_SDK
             assert "order_check" in [name for name, _ in sdk.calls]
-            raise TradingDisabled("TEST-only owner paused after order_check")
+            raise TradingDisabled("TEST-only local operator paused after order_check")
 
     authority = LateVetoAuthority(cfg, clock)
     async with MT5Client(cfg, sdk=sdk, clock=clock, authority=authority) as client:

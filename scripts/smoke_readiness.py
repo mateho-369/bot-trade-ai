@@ -1,7 +1,7 @@
 """Engineering smoke builds TEMPORARY fake source/SQL, then exercises read-only diagnostics.
 
 The smoke itself writes its disposable fixtures; the readiness/verifier operations do not.
-NO genuine release attestation, platform/feed/owner/stage qualification, transport or order.
+NO genuine release attestation, platform/feed/local-operator/stage qualification, transport or order.
 """
 
 from __future__ import annotations
@@ -39,7 +39,7 @@ def run():
         (root / "docs").mkdir()
         (root / "tests").mkdir()
         (root / "main.py").write_text('"""TEST ONLY miniature source."""\n')
-        (root / "tests/test_telegram_initdata.py").write_text('"""TEST ONLY source, never a bearer."""\n')
+        (root / "tests/test_ops_cli.py").write_text('"""TEST ONLY local-operations source fixture."""\n')
         (root / "requirements.txt").write_text("pydantic==2.13.5\n")
         records = {
             item.relative_to(root).as_posix(): {
@@ -58,7 +58,7 @@ def run():
             "python_sources": 2,
             "manifest_self_hash_excluded": True,
         }
-        path = root / "docs/RELEASE_15_MANIFEST.json"
+        path = root / "docs/RELEASE_16_MANIFEST.json"
         path.write_text(json.dumps(manifest))
         anchor = sha(path.read_bytes())
         result = verify_release(root, trusted_manifest_sha256=anchor)
@@ -66,14 +66,12 @@ def run():
         checks += 1
         assert not result.to_dict()["is_signature"] and not result.to_dict()["trading_permission"]
         checks += 1
-        assert "tests/test_telegram_initdata.py" in records and result.declared_python_sources == 2
+        assert "tests/test_ops_cli.py" in records and result.declared_python_sources == 2
         checks += 1
         cfg, _, observations = inspect_settings(root)
         assert cfg is not None and not cfg.live_trading and cfg.mt5_backend == "mock" and cfg.start_paused
         checks += 1
-        assert (
-            not observations["telegram_pair_configured"] and not observations["mt5_login_triplet_configured"]
-        )
+        assert not observations["reporter_enabled"] and not observations["mt5_login_triplet_configured"]
         checks += 1
         # Explicit TEST_ONLY empty database creation, entirely in disposable fixture scope.
         database = Database(cfg)
@@ -127,7 +125,7 @@ def run():
             "eligible_stage_evidence": False,
             "actual_native_broker_calls": 0,
             "actual_provider_network_calls": 0,
-            "actual_telegram_network_calls": 0,
+            "actual_outbound_report_network_calls": 0,
             "actual_child_processes_spawned": 0,
             "real_orders": 0,
             "production_state_writes": 0,

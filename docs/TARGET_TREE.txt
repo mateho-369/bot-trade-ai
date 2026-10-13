@@ -1,33 +1,45 @@
-TARGET TREE — cumulative Parts 1–14 implemented as ordinary source (0.12.0 / schema 2).
+TARGET TREE — cumulative Parts 1–16 implemented as ordinary source (0.14.0 / schema 2).
 CURRENT_TREE.txt is the exact packaged release tree. External/native deployment validation is not an implementation claim.
 
 mt5_ai_reflex_bot/
 ├── ai/
 │   ├── .gitkeep
 │   ├── __init__.py
+│   ├── ai_brain.py
+│   ├── ai_first.py
+│   ├── ai_first_reviewer.py
+│   ├── ai_first_schemas.py
 │   ├── ai_router.py
 │   ├── ai_supervisor.py
 │   ├── artifacts.py
+│   ├── config_adjuster.py
 │   ├── dataset.py
+│   ├── decision_journal.py
 │   ├── feature_engineering.py
 │   ├── http_transport.py
 │   ├── json_validation.py
 │   ├── learning_engine.py
+│   ├── learning_loop.py
+│   ├── local_operator_guard.py
+│   ├── market_awareness.py
 │   ├── model_registry.py
 │   ├── model_trainer.py
 │   ├── ollama_client.py
 │   ├── openai_client.py
-│   ├── owner_guard.py
 │   ├── portable_model.py
 │   ├── prompt_templates.py
+│   ├── provider_registry.py
 │   ├── replay_binding.py
 │   ├── schemas.py
 │   ├── strategy_optimizer.py
 │   ├── suggestion_store.py
 │   ├── trade_analyzer.py
+│   ├── trade_attribution.py
+│   ├── trade_audit.py
 │   └── walk_forward.py
 ├── app/
 │   ├── __init__.py
+│   ├── alerts.py
 │   ├── async_tools.py
 │   ├── backups.py
 │   ├── bot.py
@@ -35,12 +47,8 @@ mt5_ai_reflex_bot/
 │   ├── health.py
 │   ├── lifecycle.py
 │   ├── notifications.py
-│   ├── owner_actions.py
-│   ├── owner_identity.py
-│   ├── owner_services.py
 │   ├── process_guard.py
-│   ├── rate_limits.py
-│   ├── read_model.py
+│   ├── reporter.py
 │   └── scheduler.py
 ├── backtesting/
 │   ├── audit/
@@ -70,37 +78,69 @@ mt5_ai_reflex_bot/
 ├── core/
 │   ├── __init__.py
 │   ├── database.py
+│   ├── local_operator.py
 │   ├── logging_setup.py
 │   ├── migrations.py
 │   ├── models.py
 │   ├── security.py
 │   └── settings.py
-├── data/
-│   ├── backups/
-│   │   └── .gitkeep
-│   ├── candles/
-│   │   └── .gitkeep
-│   ├── logs/
-│   │   └── .gitkeep
-│   ├── models/
-│   │   └── .gitkeep
-│   ├── news/
-│   │   └── .gitkeep
-│   └── paper/
-│       └── .gitkeep
 ├── docs/
+│   ├── verification/
+│   │   ├── part12/
+│   │   │   ├── _part12_candidate_build.json
+│   │   │   ├── _part12_clean_validation.json
+│   │   │   ├── _part12_final_build.json
+│   │   │   ├── _part12_final_integrity.json
+│   │   │   ├── _part12_final_native.json
+│   │   │   ├── _part12_final_readiness.json
+│   │   │   ├── _part12_final_verification.json
+│   │   │   ├── _part12_initial_freeze.txt
+│   │   │   └── _part12_working_validation.json
+│   │   ├── part13/
+│   │   │   ├── _part13_candidate_build.json
+│   │   │   ├── _part13_candidate_extraction.json
+│   │   │   ├── _part13_candidate_verification.json
+│   │   │   ├── _part13_clean_validation.json
+│   │   │   ├── _part13_final_build.json
+│   │   │   ├── _part13_final_integrity.json
+│   │   │   ├── _part13_final_native.json
+│   │   │   ├── _part13_final_readiness.json
+│   │   │   ├── _part13_final_verification.json
+│   │   │   ├── _part13_initial_freeze.txt
+│   │   │   ├── _part13_initial_timeout_validation.json
+│   │   │   ├── _part13_original_ledger_before.json
+│   │   │   └── _part13_working_validation.json
+│   │   └── part14/
+│   │       ├── _part14_candidate_build.json
+│   │       ├── _part14_candidate_extraction.json
+│   │       ├── _part14_candidate_verification.json
+│   │       ├── _part14_clean_validation.json
+│   │       ├── _part14_final_build.json
+│   │       ├── _part14_final_integrity.json
+│   │       ├── _part14_final_native.json
+│   │       ├── _part14_final_readiness.json
+│   │       ├── _part14_final_verification.json
+│   │       ├── _part14_initial_freeze.txt
+│   │       ├── _part14_original_ledger_before.json
+│   │       ├── _part14_working_validation.json
+│   │       ├── pytest.txt
+│   │       ├── smoke_backtest.txt
+│   │       ├── smoke_bundle_audit.txt
+│   │       ├── smoke_readiness.txt
+│   │       └── smoke_replay_model.txt
+│   ├── AI_FIRST_ARCHITECTURE.md
+│   ├── ALERTS.md
 │   ├── ARCHITECTURE.md
 │   ├── BACKTESTING.md
 │   ├── BACKTEST_CONTRACT_SCHEMAS.json
 │   ├── CURRENT_TREE.txt
+│   ├── DEMO_QUICKSTART.md
 │   ├── DEPLOYMENT_SCRIPT_SOURCE_CHECKS.json
 │   ├── DEPLOYMENT_WINDOWS.md
 │   ├── MIGRATIONS.md
 │   ├── ML_REPLAY.md
 │   ├── NATIVE_VALIDATION_CHECKLIST.md
 │   ├── OPERATOR_PLAYBOOK.md
-│   ├── OWNER_UI_BROWSER_VALIDATION.json
-│   ├── OWNER_UI_PREVIEW.html
 │   ├── PARTS_01_03.md
 │   ├── PART_04.md
 │   ├── PART_04_NOTES.md
@@ -124,6 +164,8 @@ mt5_ai_reflex_bot/
 │   ├── PART_13_NOTES.md
 │   ├── PART_14.md
 │   ├── PART_14_NOTES.md
+│   ├── PART_15_NOTES.md
+│   ├── PART_16.md
 │   ├── READINESS.md
 │   ├── RELEASE_04_MANIFEST.json
 │   ├── RELEASE_05_MANIFEST.json
@@ -141,34 +183,18 @@ mt5_ai_reflex_bot/
 │   ├── RELEASE_13_VALIDATION.json
 │   ├── RELEASE_14_MANIFEST.json
 │   ├── RELEASE_14_VALIDATION.json
+│   ├── RELEASE_15_MANIFEST.json
+│   ├── RELEASE_16_MANIFEST.json
 │   ├── REPLAY_AUDIT.md
 │   ├── TARGET_TREE.txt
+│   ├── THREE_DAY_PAPER_TEST.md
+│   ├── TRAILING_AI_DESIGN.md
 │   ├── VALIDATION.md
 │   ├── VALIDATION_PART_10.md
 │   ├── VALIDATION_PART_11.md
 │   ├── VALIDATION_PART_12.md
-│   └── VALIDATION_PART_13.md
-├── miniapp/
-│   ├── api/
-│   │   ├── __init__.py
-│   │   ├── ai.py
-│   │   ├── control.py
-│   │   ├── dashboard.py
-│   │   ├── dependencies.py
-│   │   ├── logs.py
-│   │   ├── news.py
-│   │   ├── schemas.py
-│   │   ├── settings.py
-│   │   └── trades.py
-│   ├── static/
-│   │   ├── app.js
-│   │   ├── index.html
-│   │   ├── styles.css
-│   │   └── telegram_loader.js
-│   ├── __init__.py
-│   ├── preview_data.py
-│   ├── security.py
-│   └── server.py
+│   ├── VALIDATION_PART_13.md
+│   └── VALIDATION_PART_14.md
 ├── news/
 │   ├── .gitkeep
 │   ├── __init__.py
@@ -187,9 +213,11 @@ mt5_ai_reflex_bot/
 │   ├── __init__.py
 │   ├── contracts.py
 │   ├── dependencies.py
+│   ├── deployment_preflight.py
 │   ├── files.py
 │   ├── host.py
 │   ├── integrity.py
+│   ├── preflight_checks.py
 │   ├── runner.py
 │   ├── settings_inspection.py
 │   └── sqlite_snapshot.py
@@ -197,35 +225,38 @@ mt5_ai_reflex_bot/
 │   ├── .gitkeep
 │   ├── __init__.py
 │   ├── audit_backtest.py
+│   ├── audit_trades.py
 │   ├── backtest.py
 │   ├── backup_db.py
+│   ├── build_release_manifest.py
 │   ├── check_mt5_readonly.py
 │   ├── compile_exe.ps1
 │   ├── inspect_news_sources.py
+│   ├── live_view.py
 │   ├── make_backtest_fixture.py
 │   ├── make_backtest_model_fixture.py
-│   ├── preview_owner_ui.py
+│   ├── ops.py
+│   ├── preflight.py
 │   ├── readiness.py
+│   ├── resolve_symbols.py
 │   ├── run_bot_hidden.vbs
 │   ├── run_mt5_background.vbs
-│   ├── run_owner_interface.py
 │   ├── runtime_status.py
+│   ├── setup_demo.ps1
 │   ├── smoke_ai.py
+│   ├── smoke_ai_first.py
 │   ├── smoke_backtest.py
 │   ├── smoke_bundle_audit.py
 │   ├── smoke_mock.py
 │   ├── smoke_news.py
-│   ├── smoke_owner_interface.py
 │   ├── smoke_readiness.py
 │   ├── smoke_replay_model.py
 │   ├── smoke_risk.py
 │   ├── smoke_runtime.py
 │   ├── smoke_signals.py
 │   ├── stage_report.py
-│   ├── stop_runtime.py
 │   ├── synthetic_ai_fixtures.py
 │   ├── synthetic_news_fixtures.py
-│   ├── synthetic_owner_fixtures.py
 │   ├── synthetic_replay_model.py
 │   ├── synthetic_signal_market.py
 │   ├── task_scheduler_setup.ps1
@@ -242,21 +273,13 @@ mt5_ai_reflex_bot/
 │   ├── mean_reversion_strategy.py
 │   ├── momentum_strategy.py
 │   ├── news_filter.py
+│   ├── rule_fallback.py
 │   ├── signal_engine.py
 │   ├── signal_execution.py
 │   ├── signal_store.py
 │   ├── strategy_router.py
 │   ├── trend_strategy.py
 │   └── volatility_filter.py
-├── telegram_bot/
-│   ├── __init__.py
-│   ├── bot.py
-│   ├── formatters.py
-│   ├── handlers.py
-│   ├── keyboards.py
-│   ├── middleware.py
-│   ├── miniapp_auth.py
-│   └── notifications.py
 ├── tests/
 │   ├── __init__.py
 │   ├── ai_helpers.py
@@ -265,20 +288,26 @@ mt5_ai_reflex_bot/
 │   ├── conftest.py
 │   ├── fake_mt5_sdk.py
 │   ├── news_helpers.py
-│   ├── owner_helpers.py
+│   ├── preflight_helpers.py
 │   ├── readiness_helpers.py
 │   ├── replay_model_helpers.py
 │   ├── risk_helpers.py
 │   ├── runtime_helpers.py
 │   ├── signal_helpers.py
+│   ├── test_ai_adaptive_trailing.py
 │   ├── test_ai_clients.py
 │   ├── test_ai_diagnostics.py
+│   ├── test_ai_fallback_mode.py
+│   ├── test_ai_first.py
+│   ├── test_ai_first_runtime.py
 │   ├── test_ai_json.py
 │   ├── test_ai_router.py
 │   ├── test_ai_settings.py
 │   ├── test_ai_suggestions.py
 │   ├── test_ai_supervisor.py
+│   ├── test_alerts.py
 │   ├── test_artifact_atomic_publish.py
+│   ├── test_autonomous_resume.py
 │   ├── test_backtest_cli.py
 │   ├── test_backtest_dataset.py
 │   ├── test_backtest_ledger_export.py
@@ -293,24 +322,22 @@ mt5_ai_reflex_bot/
 │   ├── test_bundle_audit_runner.py
 │   ├── test_bundle_audit_semantics.py
 │   ├── test_candle_patterns.py
+│   ├── test_cent_account.py
 │   ├── test_database.py
+│   ├── test_demo_cycle_e2e.py
+│   ├── test_demo_fast_track.py
 │   ├── test_execution.py
 │   ├── test_feature_engine.py
 │   ├── test_foundation_cli.py
 │   ├── test_learning_features.py
 │   ├── test_learning_ledger.py
 │   ├── test_migrations.py
-│   ├── test_miniapp_auth.py
-│   ├── test_miniapp_controls.py
-│   ├── test_miniapp_preview.py
-│   ├── test_miniapp_reads.py
-│   ├── test_miniapp_security.py
-│   ├── test_miniapp_tls_proxy.py
 │   ├── test_model_registry.py
 │   ├── test_model_training.py
 │   ├── test_mt5_client.py
 │   ├── test_news_alerts.py
 │   ├── test_news_calendar.py
+│   ├── test_news_demo_defaults.py
 │   ├── test_news_diagnostics.py
 │   ├── test_news_evidence_cache.py
 │   ├── test_news_http.py
@@ -323,19 +350,11 @@ mt5_ai_reflex_bot/
 │   ├── test_news_sentiment_exposure.py
 │   ├── test_news_settings.py
 │   ├── test_news_types.py
+│   ├── test_ops_cli.py
 │   ├── test_order_calculator.py
-│   ├── test_owner_action_saga.py
-│   ├── test_owner_action_store.py
-│   ├── test_owner_close_batch.py
-│   ├── test_owner_hash_fence.py
-│   ├── test_owner_interface_settings.py
-│   ├── test_owner_managed_news_read.py
-│   ├── test_owner_owned_close.py
-│   ├── test_owner_proposals.py
-│   ├── test_owner_rate_limits.py
-│   ├── test_owner_restart_replay.py
-│   ├── test_owner_resume_fence.py
 │   ├── test_position_review_binding.py
+│   ├── test_preflight_checks.py
+│   ├── test_provider_registry.py
 │   ├── test_readiness_dependencies.py
 │   ├── test_readiness_files.py
 │   ├── test_readiness_host.py
@@ -343,6 +362,7 @@ mt5_ai_reflex_bot/
 │   ├── test_readiness_runner.py
 │   ├── test_readiness_settings.py
 │   ├── test_readiness_sqlite.py
+│   ├── test_release_manifest_builder.py
 │   ├── test_replay_model_bounds.py
 │   ├── test_replay_model_cli.py
 │   ├── test_replay_model_contracts.py
@@ -353,6 +373,7 @@ mt5_ai_reflex_bot/
 │   ├── test_risk_contracts.py
 │   ├── test_risk_diagnostics.py
 │   ├── test_risk_engine.py
+│   ├── test_rule_fallback.py
 │   ├── test_runtime_backups.py
 │   ├── test_runtime_composition.py
 │   ├── test_runtime_ingestion_clock.py
@@ -378,17 +399,17 @@ mt5_ai_reflex_bot/
 │   ├── test_strategies.py
 │   ├── test_strategy_optimizer.py
 │   ├── test_strategy_router.py
-│   ├── test_telegram_initdata.py
-│   ├── test_telegram_notifications.py
-│   ├── test_telegram_owner_commands.py
-│   ├── test_telegram_webhook.py
+│   ├── test_symbol_resolver.py
 │   ├── test_trade_logger.py
 │   ├── test_trading_contracts.py
 │   ├── test_trading_diagnostics.py
-│   └── test_trailing_engine.py
+│   ├── test_trailing_engine.py
+│   └── test_windows_launchers.py
 ├── trading/
 │   ├── .gitkeep
 │   ├── __init__.py
+│   ├── ai_adaptive_trailing.py
+│   ├── ai_controls.py
 │   ├── authorization.py
 │   ├── candles.py
 │   ├── client_helpers.py
@@ -409,16 +430,21 @@ mt5_ai_reflex_bot/
 │   ├── stage_gate.py
 │   ├── state_store.py
 │   ├── symbol_manager.py
+│   ├── symbol_resolver.py
 │   ├── trade_logger.py
 │   ├── trailing_engine.py
 │   └── types.py
 ├── .env.example
+├── .gitattributes
 ├── .gitignore
+├── KHMER_REVIEW.md
 ├── README.md
 ├── config.py
+├── install.bat
 ├── launcher.py
 ├── main.py
 ├── pyproject.toml
-├── requirements.linux.lock.txt
 ├── requirements.txt
+├── start.bat
+├── start_demo.bat
 └── watchdog.py

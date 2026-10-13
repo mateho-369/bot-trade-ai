@@ -1,29 +1,25 @@
-"""Artifact-bound promotion and owner live confirmation. No reports are fabricated."""
+"""Artifact-bound paper/demo stage evidence. LIVE is refused in this build."""
 
 from __future__ import annotations
 
 import hashlib
-import hmac
 import json
-import secrets
-from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import timedelta
 from decimal import Decimal
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from core.database import Database
+from core.local_operator import LocalOperator
 from core.models import (
     AccountSnapshot,
-    BotState,
     BrokerDeal,
     DeploymentEvidence,
     OrderIntent,
-    OwnerApproval,
     Trade,
 )
-from core.security import canonical_json, sha256_json
+from core.security import canonical_json
 from core.settings import OperatingMode, Settings
 from trading.risk_types import RuntimeProfile
 from trading.types import AccountInfo, AccountKind, Clock, SourceKind, TradingDisabled, valid_key
@@ -73,14 +69,6 @@ def read_report(path, limit: int = 1048576, *, expected_sha256: str | None = Non
         raise TradingDisabled("invalid stage artifact; raw contents suppressed") from None
 
 
-@dataclass(frozen=True, slots=True)
-class LiveChallenge:
-    approval_id: str
-    nonce: str = field(repr=False)
-    request_hash: str
-    expires_at: datetime
-
-
 class StageGate:
     def __init__(self, database: Database, settings: Settings, clock: Clock, profile: RuntimeProfile):
         self.database, self.settings, self.clock, self.profile = database, settings, clock, profile
@@ -91,13 +79,12 @@ class StageGate:
             evidence.stage != stage
             or not evidence.passed
             or evidence.revoked
-            or cfg.telegram_owner_id is None
-            or evidence.owner_reviewed_by != cfg.telegram_owner_id
+            or evidence.owner_reviewed_by != LocalOperator.current().operator_id
             or evidence.strategy_config_hash != cfg.strategy_fingerprint()
             or evidence.code_hash != profile.code_hash
             or evidence.model_sha256 != profile.model_sha256
         ):
-            raise TradingDisabled("stage evidence policy/model/owner binding is invalid")
+            raise TradingDisabled("stage evidence policy/model/local-review binding is invalid")
         if not evidence.started_at < evidence.finished_at <= now or evidence.created_at > now + timedelta(
             seconds=2
         ):
@@ -378,19 +365,6 @@ class StageGate:
             previous_end = chosen.finished_at
         return tuple(selected)
 
-    def live_request_hash(self, account_key: str, session_id: str, evidence_ids: tuple[int, ...]) -> str:
-        return sha256_json(
-            {
-                "purpose": "live_enable",
-                "account_key": account_key,
-                "session_id": session_id,
-                "config_hash": self.settings.safety_fingerprint(),
-                "code_hash": self.profile.code_hash,
-                "model_sha256": self.profile.model_sha256,
-                "evidence_ids": evidence_ids,
-            }
-        )
-
     def demo_fast_track_eligible(self, account: AccountInfo) -> bool:
         """DEMO_FAST_TRACK scope: owner setting AND DEMO mode AND native MT5 AND the TERMINAL itself
         reports a DEMO trade-mode account. REAL, CONTEST, unknown accounts and LIVE fail closed."""
@@ -415,84 +389,7 @@ class StageGate:
                 return (), True
             raise
 
-    def live_confirmed(
-        self, session: Session, account: AccountInfo, session_id: str, evidence: tuple[int, ...]
-    ) -> bool:
-        digest = self.live_request_hash(account.key, session_id, evidence)
-        rows = session.scalars(
-            select(OwnerApproval).where(
-                OwnerApproval.purpose == "live_enable",
-                OwnerApproval.status == "approved",
-                OwnerApproval.request_hash == digest,
-                OwnerApproval.session_id == session_id,
-                OwnerApproval.account_key == account.key,
-                OwnerApproval.config_hash == self.settings.safety_fingerprint(),
-                OwnerApproval.owner_id == self.settings.telegram_owner_id,
-                OwnerApproval.expires_at > self.clock.now(),
-            )
-        ).all()
-        return any(tuple(row.evidence_ids) == evidence for row in rows)
-
-    def request_live(self, account: AccountInfo, session_id: str, owner_id: int) -> LiveChallenge:
-        if (
-            self.settings.mode != OperatingMode.LIVE
-            or type(owner_id) is not int
-            or owner_id != self.settings.telegram_owner_id
-        ):
-            raise TradingDisabled("only the authenticated configured owner may request live confirmation")
-        nonce = secrets.token_urlsafe(32)
-        with self.database.locked_session() as session:
-            state = session.get(BotState, 1)
-            if state is None or state.session_id != session_id or state.kill_switch_active:
-                raise TradingDisabled("live confirmation runtime/session is invalid")
-            evidence = self.required_evidence(session, account)
-            digest = self.live_request_hash(account.key, session_id, evidence)
-            expiry = self.clock.now() + timedelta(seconds=self.settings.live_approval_ttl_seconds)
-            row = OwnerApproval(
-                purpose="live_enable",
-                request_hash=digest,
-                nonce_hash=hashlib.sha256(nonce.encode()).hexdigest(),
-                expires_at=expiry,
-                owner_id=owner_id,
-                session_id=session_id,
-                account_key=account.key,
-                config_hash=self.settings.safety_fingerprint(),
-                evidence_ids=list(evidence),
-                time=self.clock.now(),
-            )
-            session.add(row)
-            session.flush()
-            self.database.add_audit(
-                session, "owner.live_requested", "owner", {"approval_id": row.id, "account": account.key}
-            )
-            challenge = LiveChallenge(row.id, nonce, digest, expiry)
-        return challenge
-
-    def confirm_live(self, approval_id: str, nonce: str, owner_id: int) -> None:
-        if (
-            self.settings.telegram_owner_id is None
-            or type(owner_id) is not int
-            or owner_id != self.settings.telegram_owner_id
-        ):
-            raise TradingDisabled("only the authenticated configured owner may confirm live")
-        with self.database.locked_session() as session:
-            row, state = session.get(OwnerApproval, approval_id), session.get(BotState, 1)
-            if (
-                row is None
-                or state is None
-                or row.status != "pending"
-                or row.purpose != "live_enable"
-                or row.owner_id != owner_id
-                or row.session_id != state.session_id
-                or row.config_hash != self.settings.safety_fingerprint()
-                or row.expires_at <= self.clock.now()
-                or not hmac.compare_digest(hashlib.sha256(nonce.encode()).hexdigest(), row.nonce_hash)
-            ):
-                raise TradingDisabled("live confirmation nonce/session/configuration/expiry is invalid")
-            expected = self.live_request_hash(row.account_key, row.session_id, tuple(row.evidence_ids))
-            if row.request_hash != expected:
-                raise TradingDisabled("live confirmation payload changed")
-            row.status, row.decided_at = "approved", self.clock.now()
-            self.database.add_audit(
-                session, "owner.live_confirmed", "owner", {"approval_id": row.id, "owner_id": owner_id}
-            )
+    @staticmethod
+    def live_confirmed(*_args, **_kwargs) -> bool:
+        """This release has no live approval path; fail closed for legacy callers."""
+        return False

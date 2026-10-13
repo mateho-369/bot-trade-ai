@@ -1,33 +1,21 @@
-"""Explicit foreground lifecycle. No migration, automatic resume or force kill."""
+"""Foreground lifecycle. Reconciliation precedes any gated autonomous DEMO resume."""
 
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import logging
 import signal
-import socket
 import time
 from uuid import uuid4
 
-import uvicorn
-
 from app.async_tools import durable_call
-from app.dependencies import attach_telegram, compose, require_existing_database
+from app.dependencies import compose, require_existing_database
 from app.health import RuntimeHealth, pending_native_calls
 from app.process_guard import ProcessLock, operator_stop_requested, require_interactive_native, stop_requested
 from app.scheduler import RuntimeScheduler
 from core.database import Database
-from miniapp.server import create_app
 
 LOG = logging.getLogger("reflexbot.lifecycle")
-
-
-class OwnerAPIServer(uvicorn.Server):
-    @contextlib.contextmanager
-    def capture_signals(self):
-        # Runtime owns signals. Uvicorn must not cancel guarded writes on SIGINT.
-        yield
 
 
 class RuntimeLifecycle:
@@ -36,12 +24,14 @@ class RuntimeLifecycle:
         self.health = RuntimeHealth(settings, identity or str(uuid4()))
         self.factory = factory
         self.lock = ProcessLock(settings.resolve_path(settings.runtime_lock_file))
-        self.database = self.resources = self.scheduler = self.api = self.api_socket = None
+        self.database = self.resources = self.scheduler = None
         self.alert_handler = None  # app.alerts.AlertLogHandler while the runtime is up.
-        self.api_task = self.poll_task = self.monitor_task = None
+        self.monitor_task = None
         self.stop_event = asyncio.Event()
         self._closed = False
         self._signals = {}
+        self._ready_components: set[str] = set()
+        self._ai_health_ok = False
 
     def install_signals(self):
         loop = asyncio.get_running_loop()
@@ -75,58 +65,68 @@ class RuntimeLifecycle:
 
             self.alert_handler = attach_log_handler(r.alerts)
         self.monitor_task = asyncio.create_task(self.monitor(), name="runtime-health")
-        await r.engine.initialize()  # Claims PAUSED, restores ledger and reconciles.
+        await r.engine.initialize()  # Claims PAUSED, restores ledger and reconciles first.
+        self.health.reconciled = True
+        self._ready_components.add("execution")
+        await self._try_auto_resume("startup")
         await r.signals.initialize()
+        self._ready_components.add("signals")
+        await self._try_auto_resume("signals_ready")
         await r.supervisor.initialize()
+        self._ready_components.add("ai")
+        await self._try_auto_resume("ai_ready")
         await r.news.initialize()  # Unknown until a scheduled explicit refresh.
-        self.scheduler = RuntimeScheduler(r, self.health)
+        self._ready_components.add("news")
+        self.health.components_ready = {"execution", "signals", "ai", "news"}.issubset(self._ready_components)
+        await self._try_auto_resume("news_ready")
+        self._ai_health_ok = await r.supervisor.health_check()
+        self.health.ai_healthy = self._ai_health_ok
+        if self._ai_health_ok:
+            await self._try_auto_resume("ai_ready")
+        self.scheduler = RuntimeScheduler(r, self.health, auto_resume=self._try_auto_resume)
         await durable_call(r.notices.enqueue, "started", dedup=self.health.identity)
         if self.stop_event.is_set():
             return
-        attach_telegram(r)
-        if self.settings.runtime_api_enabled:
-            application = create_app(
-                self.settings,
-                r.owner,
-                telegram_transport=r.telegram if self.settings.telegram_use_webhook else None,
-            )
-            self.api = OwnerAPIServer(
-                uvicorn.Config(
-                    application,
-                    host=self.settings.api_host,
-                    port=self.settings.api_port,
-                    workers=1,
-                    access_log=False,
-                    proxy_headers=False,
-                    log_config=None,
-                    timeout_keep_alive=5,
-                    timeout_graceful_shutdown=None,
-                )
-            )
-            # Bind before spawning serve(): bind failures never raise SystemExit inside a task.
-            self.api_socket = socket.socket(
-                socket.AF_INET6 if ":" in self.settings.api_host else socket.AF_INET
-            )
-            self.api_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            self.api_socket.bind((self.settings.api_host, self.settings.api_port))
-            self.api_socket.listen(64)
-            self.api_socket.setblocking(False)
-            self.api_task = asyncio.create_task(self.api.serve(sockets=[self.api_socket]), name="owner-api")
-            while not self.api.started:
-                if self.api_task.done():
-                    await self.api_task
-                    raise RuntimeError("owner API exited before readiness")
-                await asyncio.sleep(0.05)
-        if r.telegram is not None:
-            if self.settings.runtime_register_menu:
-                await r.telegram.set_owner_menu()
-            if self.settings.telegram_use_webhook:
-                await r.telegram.register_webhook()  # Explicit reviewed .env chooses webhook mode.
-            else:
-                self.poll_task = asyncio.create_task(r.telegram.poll(), name="owner-polling")
         self.scheduler.start()
         self.health.state = "ready"
         await durable_call(self.health.write)
+
+    async def _try_auto_resume(self, trigger: str, *, ai_healthy: bool | None = None) -> bool:
+        if ai_healthy is not None:
+            self._ai_health_ok = ai_healthy
+            self.health.ai_healthy = ai_healthy
+        r = self.resources
+        if not self.settings.autonomous_demo or r is None or not r.engine._initialized:
+            return False
+        components_ready = {"execution", "signals", "ai", "news"}.issubset(self._ready_components)
+        try:
+            resumed = await durable_call(
+                r.engine.control.auto_resume,
+                account_key=r.engine.account_key,
+                components_ready=components_ready,
+                ai_healthy=self._ai_health_ok,
+                trigger=trigger,
+            )
+        except Exception:
+            LOG.warning("AUTONOMOUS_DEMO resume gates could not be verified; entries remain paused")
+            return False
+        if resumed:
+            LOG.warning(
+                "AUTONOMOUS_DEMO entries resumed after reconciliation and all shared safety gates passed"
+            )
+            await durable_call(
+                r.notices.enqueue,
+                "auto_resumed",
+                dedup=self.health.identity + ":" + r.broker.clock.now().isoformat(),
+            )
+            if getattr(r, "alerts", None) is not None:
+                r.alerts.emit(
+                    "WARNING",
+                    "Runtime",
+                    "AUTONOMOUS_DEMO entries resumed after safety gates passed",
+                    action="Local operator may pause or stop with python -m scripts.ops",
+                )
+        return resumed
 
     async def monitor(self):
         last_renewal = time.monotonic()
@@ -136,10 +136,6 @@ class RuntimeLifecycle:
                     self.settings
                 ):
                     self.stop_event.set()
-                if any(task is not None and task.done() for task in (self.api_task, self.poll_task)):
-                    if not self.stop_event.is_set():
-                        LOG.error("Owner transport exited; runtime will stop paused")
-                        self.stop_event.set()
                 r = self.resources
                 if self.stop_event.is_set() and r is not None and r.engine._initialized:
                     if time.monotonic() - last_renewal >= self.settings.heartbeat_interval_seconds:
@@ -150,9 +146,8 @@ class RuntimeLifecycle:
                 # Surface the failure kind for diagnosis; storage errors carry no
                 # credentials, but never dump tracebacks or raw broker payloads.
                 LOG.error(
-                    "Runtime health/storage unavailable; graceful stop requested (%s: %s)",
+                    "Runtime health/storage unavailable; graceful stop requested (%s)",
                     type(error).__name__,
-                    str(error)[:200],
                 )
                 self.stop_event.set()
             await asyncio.sleep(1)
@@ -168,37 +163,15 @@ class RuntimeLifecycle:
         self.stop_event.set()
         self.health.state = "stopping"
         r = self.resources
-        if r is not None:
-            r.owner.closing = True  # Fence preparation/resume/close; downward controls remain available.
         # Fence in memory BEFORE attempting SQL: transient pause persistence
         # failure must not leave the entry scheduler accepting work until retry.
         if self.scheduler is not None:
             self.scheduler.stop_accepting()
         if r is not None and r.engine.control.session_id is not None:
             await durable_call(r.engine.control.pause_for_shutdown)
-        if self.api is not None:
-            self.api.should_exit = True
-        if r is not None and r.telegram is not None and r.telegram._polling:
-            await r.telegram.dispatcher.stop_polling()
         if self.scheduler is not None:
             while not await self.scheduler.drain(self.settings.runtime_shutdown_seconds):
                 LOG.error("Active job remains; no force cancellation/replacement is permitted")
-        # Servers finish accepted requests before resources disappear. No wait_for cancellation.
-        for task in (self.api_task, self.poll_task):
-            if task is not None:
-                try:
-                    await task
-                except Exception:
-                    LOG.error("Owner transport exited with a suppressed error")
-        if r is not None and r.telegram is not None:
-            pending = set(r.telegram.dispatcher._handle_update_tasks)
-            if pending:
-                await asyncio.gather(*pending, return_exceptions=True)
-        if r is not None:
-            while r.owner.active_actions:
-                await asyncio.wait(
-                    set(r.owner.active_actions), timeout=self.settings.runtime_shutdown_seconds
-                )
         if self.scheduler is not None:
             self.scheduler.finish()
         if r is not None:
@@ -219,19 +192,22 @@ class RuntimeLifecycle:
                 detach_log_handler(getattr(self, "alert_handler", None))
                 self.alert_handler = None
                 try:  # Last delivery of pending alerts (bounded; never blocks shutdown on errors).
-                    await asyncio.wait_for(r.alerts.flush(getattr(r.telegram, "bot", None)), timeout=10)
+                    await asyncio.wait_for(r.alerts.flush(getattr(r, "reporter", None)), timeout=10)
                 except Exception:
                     LOG.warning("Final alert flush incomplete")
-            if r.telegram is not None:
-                await r.telegram.close()
             await durable_call(r.notices.enqueue, "stopped", dedup=self.health.identity)
+            try:
+                await asyncio.wait_for(r.notices.drain(limit=10), timeout=6)
+            except Exception:
+                LOG.warning("Final local/outbound report drain incomplete")
+            reporter = getattr(r, "reporter", None)
+            if reporter is not None:
+                await reporter.close()
         self.health.state = "stopped"
         await durable_call(self.health.write)
         self._closed = True
         if self.monitor_task is not None:
             await self.monitor_task
-        if self.api_socket is not None:
-            self.api_socket.close()
         if self.database is not None:
             self.database.close()
         self.lock.release()

@@ -15,7 +15,7 @@ async def test_diagnostic_ignores_host_modes_credentials_and_cleans_temp_state(t
         "MT5_BACKEND": "real",
         "MT5_PASSWORD": "TEST_HOST_SECRET",
         "TELEGRAM_BOT_TOKEN": "TEST_HOST_TOKEN",
-        "TELEGRAM_OWNER_ID": "not-a-number",
+        "TELEGRAM_REPORT_CHAT_ID": "not-a-number",
         "PROJECT_ROOT": str(tmp_path),
     }.items():
         monkeypatch.setenv(name, value)

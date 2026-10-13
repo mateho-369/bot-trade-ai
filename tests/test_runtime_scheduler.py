@@ -27,13 +27,13 @@ async def system(tmp_path):
 
 async def test_composed_runtime_shares_actual_guarded_services(system):
     r, h, jobs = system
-    assert r.owner.execution is r.engine
-    assert r.owner.news is r.news and r.owner.suggestions is r.supervisor.suggestions
+    assert r.engine.broker is r.broker and r.positions.engine is r.engine
+    assert r.supervisor.suggestions.database is r.database
     assert r.engine.profile == r.signals.profile == r.supervisor.profile == r.news.profile
-    assert r.owner.clock is r.broker.clock
+    assert r.broker.clock is r.engine.clock
     assert r.database.status()["state"] == "paused"
     assert (await jobs.run_job("signals"))["executed"] == 0
-    assert not r.telegram
+    assert r.reporter is not None and not r.reporter.enabled
 
 
 @pytest.mark.parametrize("control", ["paused", "killed"])
@@ -171,10 +171,12 @@ async def test_daily_report_is_bounded_and_read_advisory_only(system):
     assert r.database.status()["state"] == "paused"
 
 
-async def test_no_transport_no_delivery_attempts(system):
+async def test_disabled_reporter_still_persists_local_reports_without_delivery(system):
     r, h, jobs = system
     r.notices.enqueue("started", dedup="test")
-    assert (await jobs.run_job("notifications"))["state"] == "no_transport"
+    result = await jobs.run_job("notifications")
+    assert not r.reporter.enabled and result["runtime"]["disabled"] == 1
+    assert (r.reporter.reports_dir / "actions.log").is_file()
     with r.database.session() as session:
         assert (
             session.scalar(select(AuditLog.id).where(AuditLog.action == "runtime.notice_attempted")) is None

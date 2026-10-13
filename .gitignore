@@ -6,8 +6,6 @@
 *.pem
 *.key
 *.initdata
-*owner_initdata*.txt
-*owner-initdata*.txt
 
 # Python / tools
 .venv/

@@ -13,7 +13,7 @@ from ai.ai_router import FALLBACK_ELIGIBLE_OUTCOMES, AIRouter
 from ai.feature_engineering import FeatureEngineering
 from ai.model_registry import ModelRegistry
 from ai.prompt_templates import entry_request, make_request
-from ai.schemas import EntryReply, PositionReply, SettingsReply
+from ai.schemas import EntryReply, MarketReply, PositionReply, SettingsReply
 from ai.suggestion_store import SuggestionStore
 from ai.trade_analyzer import TradeAnalyzer
 from core.database import Database
@@ -96,6 +96,35 @@ class AISupervisor:
     def _ready(self):
         if not self._initialized:
             raise TradingDisabled("explicitly initialize read-only AI supervision first")
+
+    async def health_check(self) -> bool:
+        """Prove the configured AI path returns a bound read-only response; never approves a trade."""
+        self._ready()
+        now = self.clock.now()
+        request = make_request(
+            "market",
+            {"health_check": True, "read_only": True, "cannot_authorize_trading": True},
+            settings=self.settings,
+            profile=self.profile,
+            as_of=now,
+            expires_at=now + timedelta(seconds=min(self.settings.ai_timeout_seconds, 60)),
+        )
+        try:
+            routed = await self.router.complete(request)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            LOG.warning("AI health check failed; autonomous entries remain paused")
+            return False
+        healthy = routed is not None and isinstance(routed.reply, MarketReply)
+        if healthy:
+            await asyncio.to_thread(
+                self.database.audit,
+                "ai.health_check_passed",
+                "ai",
+                {"request_hash": request.request_hash, "provider": routed.provider},
+            )
+        return healthy
 
     async def _veto(self, purpose, reason, **details):
         await asyncio.to_thread(

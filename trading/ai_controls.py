@@ -1,23 +1,23 @@
-"""Owner AI controls + AI-dynamic trade limits (layer 1) inside fixed hard caps (layer 2).
+"""Local AI runtime settings + AI-dynamic trade limits (layer 1) inside fixed hard caps (layer 2).
 
 Layer 1 (AI-adjustable, written by ``ai.config_adjuster`` into ``dynamic_config``)::
 
-    max_daily_trades        6..20   (owner default MAX_DAILY_TRADES, 12)
-    max_open_positions      1..5    (owner default MAX_OPEN_POSITIONS, 3)
-    risk_percent_per_trade  0.1..1.0 % (owner default MAX_RISK_PERCENT_PER_TRADE, 0.5)
-    target_profit_per_trade $1..$20 (owner default TARGET_PROFIT_USD_PER_TRADE, 5)
+    max_daily_trades        6..20   (configured default MAX_DAILY_TRADES, 12)
+    max_open_positions      1..5    (configured default MAX_OPEN_POSITIONS, 3)
+    risk_percent_per_trade  0.1..1.0 % (configured default MAX_RISK_PERCENT_PER_TRADE, 0.5)
+    target_profit_per_trade $1..$20 (configured default TARGET_PROFIT_USD_PER_TRADE, 5)
 
 Layer 2 (module constants, never AI- or .env-adjustable here)::
 
     HARD_MAX_DAILY_TRADES 25, HARD_MAX_OPEN_POSITIONS 5, HARD_MAX_RISK_PERCENT 1.0 %
     daily loss 3 % / drawdown 10 % latches auto-pause (trading.risk_engine, unchanged)
 
-``effective_limits`` returns the owner defaults unless ALL hold: AI_DYNAMIC_LIMITS_ENABLED, mode is
+``effective_limits`` returns the configured defaults unless ALL hold: AI_DYNAMIC_LIMITS_ENABLED, mode is
 PAPER/DEMO/LIVE (never BACKTEST), and the runtime published a FRESH "AI available" heartbeat. So an
 AI outage reverts to the safe defaults automatically. In LIVE a dynamic value can only be LOWER
-than the owner setting (never an escalation of real-money exposure).
+than the configured setting (never an escalation of real-money exposure).
 
-``ai_owner_settings`` stores owner runtime toggles (currently AI_FALLBACK_MODE). Runtime toggles live
+``ai_owner_settings`` stores local runtime settings (currently AI_FALLBACK_MODE). Runtime toggles live
 in the database, not in Settings, so the watchdog config hash and stage evidence stay stable.
 
 No function here places, modifies or closes an order.
@@ -38,8 +38,10 @@ from sqlalchemy import JSON, BigInteger, Integer, String, inspect, select
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from core.database import Database
+from core.local_operator import LocalOperator
 from core.models import UTCDateTime
 from core.settings import OperatingMode, Settings
+from trading.types import TradingDisabled
 
 LOG = logging.getLogger("trading.ai_controls")
 
@@ -63,7 +65,7 @@ class ControlBase(DeclarativeBase):
     pass
 
 
-class AIOwnerSetting(ControlBase):
+class AIRuntimeSetting(ControlBase):
     __tablename__ = "ai_owner_settings"
     key: Mapped[str] = mapped_column(String(64), primary_key=True)
     value: Mapped[Any] = mapped_column(JSON, nullable=False)
@@ -111,12 +113,12 @@ def _tables_present(database: Database) -> bool:
     return present
 
 
-# -- owner fallback mode --------------------------------------------------------------------------
+# -- local operator fallback mode ----------------------------------------------------------------
 _MODE_CACHE: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 
 
 def fallback_mode(database: Database | None, settings: Settings) -> str:
-    """Effective AI_FALLBACK_MODE: owner DB override (Telegram/Mini App) else the setting."""
+    """Effective AI_FALLBACK_MODE: local operator database override else the setting."""
     default = settings.ai_fallback_mode
     if database is None:
         return default
@@ -128,7 +130,7 @@ def fallback_mode(database: Database | None, settings: Settings) -> str:
     if _tables_present(database):
         try:
             with database.session() as session:
-                row = session.get(AIOwnerSetting, "ai_fallback_mode")
+                row = session.get(AIRuntimeSetting, "ai_fallback_mode")
                 if row is not None and row.value in FALLBACK_MODES:
                     mode = row.value
         except Exception:
@@ -142,9 +144,9 @@ def fallback_status(database: Database | None, settings: Settings) -> dict:
     source, updated_at, updated_by = "settings", None, None
     if database is not None and _tables_present(database):
         with database.session() as session:
-            row = session.get(AIOwnerSetting, "ai_fallback_mode")
+            row = session.get(AIRuntimeSetting, "ai_fallback_mode")
             if row is not None and row.value in FALLBACK_MODES:
-                source, updated_at, updated_by = "owner", row.updated_at.isoformat(), row.updated_by
+                source, updated_at, updated_by = "local_operator", row.updated_at.isoformat(), row.updated_by
     return {
         "mode": mode,
         "source": source,
@@ -161,26 +163,30 @@ def fallback_status(database: Database | None, settings: Settings) -> dict:
     }
 
 
-def set_fallback_mode(database: Database, clock, mode: str, *, owner_id: int) -> dict:
-    """Owner-only (enforced by the owner service). Audited. Never touches kill/pause/limits."""
+def set_fallback_mode(database: Database, clock, mode: str, *, operator: LocalOperator) -> dict:
+    """Current local operator only. Audited. Never touches kill/pause/limits."""
+    if not isinstance(operator, LocalOperator):
+        raise TradingDisabled("current local operator required")
+    operator.require_current()
+    operator_id = operator.operator_id
     if mode not in FALLBACK_MODES:
         raise ValueError("unknown AI fallback mode")
     ensure_control_tables(database)
     with database.session() as session:
-        row = session.get(AIOwnerSetting, "ai_fallback_mode")
+        row = session.get(AIRuntimeSetting, "ai_fallback_mode")
         previous = row.value if row is not None else None
         if row is None:
-            row = AIOwnerSetting(key="ai_fallback_mode", value=mode, updated_at=clock.now())
+            row = AIRuntimeSetting(key="ai_fallback_mode", value=mode, updated_at=clock.now())
             session.add(row)
-        row.value, row.updated_at, row.updated_by = mode, clock.now(), owner_id
+        row.value, row.updated_at, row.updated_by = mode, clock.now(), operator_id
         database.add_audit(
             session,
-            "owner.ai_fallback_mode_changed",
-            "owner",
-            {"owner_id": owner_id, "from": previous, "to": mode},
+            "local_operator.ai_fallback_mode_changed",
+            "local_operator",
+            {"operator_id": operator_id, "from": previous, "to": mode},
         )
     _MODE_CACHE.pop(database.engine, None)
-    LOG.info("AI_FALLBACK: owner set mode %s", mode)
+    LOG.info("AI_FALLBACK: local operator set mode %s", mode)
     return {"mode": mode, "previous": previous}
 
 
@@ -190,10 +196,10 @@ def publish_ai_status(database: Database, clock, *, mode: str, detail: str = "")
     if not _tables_present(database):
         ensure_control_tables(database)
     with database.session() as session:
-        row = session.get(AIOwnerSetting, "ai_status")
+        row = session.get(AIRuntimeSetting, "ai_status")
         value = {"mode": mode, "at": clock.now().isoformat(), "detail": detail[:120]}
         if row is None:
-            session.add(AIOwnerSetting(key="ai_status", value=value, updated_at=clock.now()))
+            session.add(AIRuntimeSetting(key="ai_status", value=value, updated_at=clock.now()))
         else:
             row.value, row.updated_at = value, clock.now()
 
@@ -203,7 +209,7 @@ def ai_status(database: Database, clock, *, session=None) -> dict:
         return {"available": False, "mode": "unknown", "at": None}
 
     def read(s):
-        row = s.get(AIOwnerSetting, "ai_status")
+        row = s.get(AIRuntimeSetting, "ai_status")
         return None if row is None else (dict(row.value), row.updated_at)
 
     if session is not None:
@@ -254,7 +260,7 @@ def dynamic_enabled(settings: Settings) -> bool:
     return bool(settings.ai_dynamic_limits_enabled and settings.mode != OperatingMode.BACKTEST)
 
 
-def owner_default(settings: Settings, parameter: str):
+def configured_default(settings: Settings, parameter: str):
     return {
         "max_daily_trades": settings.max_daily_trades,
         "max_open_positions": settings.max_open_positions,
@@ -301,7 +307,7 @@ def effective_limits(
             return defaults(settings, reason="ai_unavailable_using_defaults")
         values = read_dynamic(database, session=session)
     except Exception:
-        LOG.warning("Dynamic limits unreadable; owner defaults apply")
+        LOG.warning("Dynamic limits unreadable; configured defaults apply")
         return defaults(settings, reason="dynamic_limits_unreadable")
     if not values:
         return defaults(settings, reason="no_ai_adjustments")
@@ -350,10 +356,10 @@ def write_dynamic(session, settings: Settings, clock, parameter: str, value, *, 
     row = session.get(DynamicConfig, parameter)
     if row is None:
         row = DynamicConfig(
-            parameter=parameter, value=value, default_value=owner_default(settings, parameter)
+            parameter=parameter, value=value, default_value=configured_default(settings, parameter)
         )
         session.add(row)
-    row.value, row.default_value = value, owner_default(settings, parameter)
+    row.value, row.default_value = value, configured_default(settings, parameter)
     row.applied_at, row.history_id, row.reason = clock.now(), history_id, (reason or "")[:600]
 
 

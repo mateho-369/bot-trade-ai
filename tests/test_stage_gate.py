@@ -12,11 +12,10 @@ from datetime import timedelta
 import pytest
 
 from core.database import Database
-from core.models import BotState, DeploymentEvidence, OwnerApproval
+from core.models import DeploymentEvidence
 from core.security import canonical_json
-from tests.risk_helpers import MOMENT, OWNER, D, config
+from tests.risk_helpers import MOMENT, OPERATOR_ID, D, config
 from trading.risk_types import RuntimeProfile
-from trading.runtime_state import RuntimeControl
 from trading.stage_gate import StageGate, read_report
 from trading.types import AccountInfo, AccountKind, ManualClock, SourceKind, TradingDisabled
 
@@ -60,7 +59,7 @@ def report(sample, **overrides):
         artifact_path="reports/backtest.json",
         artifact_sha256="a" * 64,
         passed=True,
-        owner_reviewed_by=OWNER,
+        owner_reviewed_by=OPERATOR_ID,
         revoked=False,
     )
     for key, value in overrides.items():
@@ -117,7 +116,7 @@ def test_structurally_valid_reviewed_backtest_is_artifact_and_dataset_bound(samp
     [
         {"passed": False},
         {"revoked": True},
-        {"owner_reviewed_by": OWNER + 1},
+        {"owner_reviewed_by": OPERATOR_ID + 1},
         {"code_hash": "e" * 64},
         {"model_sha256": "e" * 64},
         {"strategy_config_hash": "e" * 64},
@@ -221,72 +220,3 @@ def test_paper_demo_claims_require_actual_trade_and_account_ledger(sample):
     with db.session() as session:
         with pytest.raises(TradingDisabled, match="trade records"):
             gate._verify_stage_ledger(session, row, "paper")
-
-
-@pytest.fixture
-def live(tmp_path, monkeypatch):
-    cfg = config(tmp_path, mt5_backend="real", paper_trading=False, demo_mode=False, live_trading=True)
-    db = Database(cfg)
-    db.initialize()
-    clock = ManualClock(MOMENT)
-    control = RuntimeControl(db, cfg, clock)
-    control.claim()
-    gate = StageGate(db, cfg, clock, RuntimeProfile("c" * 64, "d" * 64, SourceKind.MT5))
-    # TEST ONLY isolates nonce logic; actual required_evidence never has this bypass.
-    monkeypatch.setattr(gate, "required_evidence", lambda session, account: (1, 2, 3))
-    account = replace(paper_account(), source=SourceKind.MT5, kind=AccountKind.REAL)
-    yield cfg, db, clock, control, gate, account
-    control.release()
-    db.close()
-
-
-def test_live_nonce_is_hashed_single_use_session_account_code_bound(live):
-    cfg, db, _, control, gate, account = live
-    challenge = gate.request_live(account, control.session_id, OWNER)
-    assert challenge.nonce not in repr(challenge)
-    with db.session() as session:
-        stored = session.get(OwnerApproval, challenge.approval_id)
-        assert stored.nonce_hash != challenge.nonce and stored.status == "pending"
-        assert not gate.live_confirmed(session, account, control.session_id, (1, 2, 3))
-    with pytest.raises(TradingDisabled):
-        gate.confirm_live(challenge.approval_id, "wrong", OWNER)
-    gate.confirm_live(challenge.approval_id, challenge.nonce, OWNER)
-    with db.session() as session:
-        assert gate.live_confirmed(session, account, control.session_id, (1, 2, 3))
-        assert not gate.live_confirmed(session, account, "other-session", (1, 2, 3))
-        assert not gate.live_confirmed(
-            session, replace(account, server="different"), control.session_id, (1, 2, 3)
-        )
-        assert not gate.live_confirmed(session, account, control.session_id, (1, 2, 4))
-        changed = StageGate(db, cfg, live[2], RuntimeProfile("e" * 64, "d" * 64, SourceKind.MT5))
-        assert not changed.live_confirmed(session, account, control.session_id, (1, 2, 3))
-    with pytest.raises(TradingDisabled):
-        gate.confirm_live(challenge.approval_id, challenge.nonce, OWNER)
-
-
-@pytest.mark.parametrize("case", ["owner", "expiry", "session", "configuration", "payload"])
-def test_live_confirmation_cannot_override_binding(live, case):
-    cfg, db, clock, control, gate, account = live
-    challenge = gate.request_live(account, control.session_id, OWNER)
-    owner = OWNER + 1 if case == "owner" else OWNER
-    if case == "expiry":
-        clock.advance(timedelta(seconds=cfg.live_approval_ttl_seconds + 1))
-    with db.session() as session:
-        row = session.get(OwnerApproval, challenge.approval_id)
-        if case == "session":
-            session.get(BotState, 1).session_id = "new-session"
-        if case == "configuration":
-            row.config_hash = "f" * 64
-        if case == "payload":
-            row.evidence_ids = [9]
-    with pytest.raises(TradingDisabled):
-        gate.confirm_live(challenge.approval_id, challenge.nonce, owner)
-
-
-def test_confirmed_live_expires_without_rearming(live):
-    cfg, db, clock, control, gate, account = live
-    challenge = gate.request_live(account, control.session_id, OWNER)
-    gate.confirm_live(challenge.approval_id, challenge.nonce, OWNER)
-    clock.advance(timedelta(seconds=cfg.live_approval_ttl_seconds + 1))
-    with db.session() as session:
-        assert not gate.live_confirmed(session, account, control.session_id, (1, 2, 3))

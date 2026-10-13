@@ -1,4 +1,4 @@
-"""Explicit offline/stdout-only preflight; no broker/DB original connection, daemon or owner approval."""
+"""Explicit offline/stdout-only preflight; no broker/DB original connection, daemon or operator approval."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ def main(argv=None):
         description="Read-only offline readiness observations, NEVER authorization"
     )
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[1])
-    parser.add_argument("--manifest", default="docs/RELEASE_15_MANIFEST.json")
+    parser.add_argument("--manifest", default="docs/RELEASE_16_MANIFEST.json")
     parser.add_argument("--trusted-manifest-sha256")
     parser.add_argument("--profile", choices=("development", "windows_native"), default="development")
     parser.add_argument(

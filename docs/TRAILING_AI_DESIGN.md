@@ -41,7 +41,7 @@ profit ≥ 90 %  → lock 90 % → AI: extend_tp_to_120 | close_now | tighten_lo
 6. An attempt to remove or loosen a lock raises `LockRegressionError` (BUY stop may only rise, SELL
    stop may only fall). The rejection is asserted and nothing is sent.
 
-The AI can never override risk limits, change `max_open_positions`, touch pause/kill, or remove a
+The AI can never override risk limits, change `max_open_positions`, touch local pause/kill state, or remove a
 lock. Protective work keeps running while entries are paused or killed.
 
 ## Journal (`ai_decision_journal`, kind = `trailing`)

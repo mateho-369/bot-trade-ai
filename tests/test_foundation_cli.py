@@ -18,6 +18,6 @@ def test_explicit_missing_env_file_fails(tmp_path):
 
 def test_invalid_config_output_does_not_expose_input(tmp_path, capsys):
     path = tmp_path / ".env"
-    path.write_text('TELEGRAM_OWNER_ID="not-an-id-secret"\n', encoding="utf-8")
+    path.write_text('UNKNOWN_SETTING="not-an-id-secret"\n', encoding="utf-8")
     assert main(["check-config", "--env-file", str(path)]) == 2
     assert "not-an-id-secret" not in capsys.readouterr().err

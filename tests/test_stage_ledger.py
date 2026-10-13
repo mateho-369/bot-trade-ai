@@ -7,7 +7,7 @@ from sqlalchemy import select
 
 from core.database import Database
 from core.models import AccountSnapshot, BrokerDeal, DeploymentEvidence, OrderIntent, Trade
-from tests.risk_helpers import MOMENT, OWNER, D, config
+from tests.risk_helpers import MOMENT, OPERATOR_ID, D, config
 from trading.risk_types import RuntimeProfile
 from trading.stage_gate import StageGate
 from trading.types import ManualClock, SourceKind, TradingDisabled
@@ -46,7 +46,7 @@ def sample(tmp_path):
             artifact_sha256="f" * 64,
             metrics_json={"closed_trades": 100, "profit_factor": "2", "max_drawdown_percent": "0"},
             passed=True,
-            owner_reviewed_by=OWNER,
+            owner_reviewed_by=OPERATOR_ID,
         )
         session.add(evidence)
         for index in range(100):

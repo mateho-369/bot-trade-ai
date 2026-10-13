@@ -23,8 +23,6 @@ async def make_news_runtime(tmp_path, *, source=SourceKind.SYNTHETIC, **changes)
     cfg = Settings(
         _env_file=None,
         project_root=tmp_path,
-        telegram_owner_id=123456789,
-        telegram_bot_token="123456789:TEST_ONLY_NEVER_CONTACT_TELEGRAM",
         symbols=("EURUSD", "GBPUSD"),
         **data,
     )

@@ -398,7 +398,7 @@ def test_minor_risk_change_auto_applies_inside_owner_ceiling(market):
     assert "ai.config_auto_applied" in audit_actions(database)
 
 
-def test_major_changes_wait_for_owner_and_effective_values_never_exceed_owner_caps(market):
+def test_major_changes_wait_for_local_operator_and_stay_within_hard_caps(market):
     settings, database, clock, _ = market
     profile = RuntimeProfile.current(settings, SourceKind.SYNTHETIC)
     store = SuggestionStore(database, settings, clock, profile)
@@ -407,16 +407,16 @@ def test_major_changes_wait_for_owner_and_effective_values_never_exceed_owner_ca
     result = layer.propose("max_open_positions", 1, reason="choppy market")  # 3 -> 1 = 67 % change.
     assert (result.classification, result.status) == ("major", "pending") and result.suggestion_id
     assert layer.effective()["max_open_positions"] == settings.max_open_positions
-    store.decide(result.suggestion_id, owner_id=OWNER, approve=True)
-    assert layer.sync_owner_decisions() == 1
+    store.decide(result.suggestion_id, operator=OWNER, approve=True)
+    assert layer.sync_operator_decisions() == 1
     assert layer.effective()["max_open_positions"] == 1
     trend = {"regime": "trending", "news_risk": "low"}
     raised = layer.propose("risk_percent_per_trade", 1.0, reason="strong trend", context=trend)
     assert (raised.classification, raised.status) == ("major", "pending")  # +100 % needs the owner.
-    layer.decide(raised.overlay_id, owner_id=OWNER, approve=True)
+    layer.decide(raised.overlay_id, operator=OWNER, approve=True)
     assert layer.effective()["risk_percent_per_trade"] == Decimal("1.0")  # Layer-2 hard cap is 1.0 %.
     with pytest.raises(TradingDisabled):
-        store.apply(result.suggestion_id, owner_id=OWNER)  # Never a stopped settings projection.
+        store.apply(result.suggestion_id, operator=OWNER)  # Never a stopped settings projection.
 
 
 @pytest.mark.parametrize(
@@ -476,7 +476,7 @@ async def test_ai_overlay_symbols_and_daily_trades_feed_the_entry_gate(market):
     profile = RuntimeProfile.current(settings, SourceKind.SYNTHETIC)
     layer = adjuster(market, suggestions=SuggestionStore(database, settings, clock, profile))
     pending = layer.propose("symbols_to_trade", ["XAUUSD"], reason="EURUSD too quiet")
-    layer.decide(pending.overlay_id, owner_id=OWNER, approve=True)
+    layer.decide(pending.overlay_id, operator=OWNER, approve=True)
     brain = AIBrain(settings, clock, provider=Provider(decision_json()), adjuster=layer)
     reasons = brain.gate(decode("decision", decision_json()), await snapshot_for(market))
     assert "symbol_disabled_by_ai_overlay" in reasons

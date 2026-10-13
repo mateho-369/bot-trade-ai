@@ -9,7 +9,7 @@ After each closed trade (win or loss):
    before high-impact news" are written to the AI Decision Journal (kind=lesson) and are fed back
    into future prompts via ``MarketSnapshot.lessons``.
 3. **Strategy weights** – per-strategy realized performance nudges weights by at most the owner's
-   MAX_STRATEGY_WEIGHT_STEP; this is ALWAYS a major change routed to owner approval.
+   MAX_STRATEGY_WEIGHT_STEP; this is ALWAYS a major change kept pending for local operator review.
 4. **Outcome** – realized P&L is attached to every journal row for that position so AI decision
    quality can be measured (``DecisionJournal.stats``).
 
